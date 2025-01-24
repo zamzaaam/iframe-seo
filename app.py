@@ -1,14 +1,10 @@
 import streamlit as st
 import requests
-import re
-from bs4 import BeautifulSoup
 import csv
+from bs4 import BeautifulSoup
 from io import StringIO
 
-# Regex pour extraire les liens d'iframes
-IFRAME_REGEX = r'<iframe[^>]*src=["\']([^"\']+)["\']'
-
-# Fonction pour extraire les liens iframe d'une URL
+# Fonction pour extraire les liens iframe dans //body/div/div/main/
 def extract_iframe_links(url):
     try:
         response = requests.get(url, timeout=10)
@@ -16,20 +12,23 @@ def extract_iframe_links(url):
             html_content = response.text
             soup = BeautifulSoup(html_content, "html.parser")
             
-            # Extraire uniquement le contenu de la balise <body>
+            # Naviguer dans le chemin spécifique
             body = soup.find("body")
             if not body:
                 return []
-            
-            # Exclure les iframes présents dans des balises <nav> (menu) ou <footer>
-            excluded_sections = body.find_all(["nav", "footer"])
-            for section in excluded_sections:
-                section.decompose()  # Supprimer ces sections du DOM
-            
-            # Extraire les liens <iframe> restants dans le body
-            iframes = body.find_all("iframe")
-            iframe_links = [iframe.get("src") for iframe in iframes if iframe.get("src")]
-            return iframe_links
+
+            # Trouver le chemin exact : body > div > div > main
+            main_content = body.find("div")
+            if main_content:
+                nested_div = main_content.find("div")
+                if nested_div:
+                    main_section = nested_div.find("main")
+                    if main_section:
+                        # Extraire tous les <iframe> dans ce chemin
+                        iframes = main_section.find_all("iframe")
+                        iframe_links = [iframe.get("src") for iframe in iframes if iframe.get("src")]
+                        return iframe_links
+            return []
         else:
             return []
     except Exception as e:
@@ -41,7 +40,6 @@ def extract_urls_from_sitemap(sitemap_url):
     try:
         response = requests.get(sitemap_url, timeout=10)
         if response.status_code == 200:
-            # Utiliser le parser lxml pour lire les sitemaps XML
             soup = BeautifulSoup(response.content, "lxml")
             urls = [loc.text for loc in soup.find_all("loc")]
             return urls
@@ -53,8 +51,8 @@ def extract_urls_from_sitemap(sitemap_url):
         return []
 
 # Streamlit app
-st.title("Extraction des liens d'iframes")
-st.markdown("Cette application extrait les liens contenus dans les balises `<iframe>` d'une ou plusieurs pages web.")
+st.title("Extraction des liens d'iframes (contenu spécifique)")
+st.markdown("Cette application extrait les liens `<iframe>` uniquement situés dans `//body/div/div/main/`.")
 
 # Récupérer le type d'entrée de l'utilisateur
 input_type = st.radio("Fournissez une source : ", ["Sitemaps XML", "Liste d'URLs"])
