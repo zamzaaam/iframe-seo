@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
-import csv
 from bs4 import BeautifulSoup
+import csv
 from io import StringIO
 
 # Fonction pour extraire les liens iframe dans //body/div/div/main/
@@ -12,12 +12,11 @@ def extract_iframe_links(url):
             html_content = response.text
             soup = BeautifulSoup(html_content, "html.parser")
             
-            # Naviguer dans le chemin spécifique
+            # Naviguer dans le chemin spécifique : //body/div/div/main/
             body = soup.find("body")
             if not body:
                 return []
 
-            # Trouver le chemin exact : body > div > div > main
             main_content = body.find("div")
             if main_content:
                 nested_div = main_content.find("div")
@@ -26,7 +25,12 @@ def extract_iframe_links(url):
                     if main_section:
                         # Extraire tous les <iframe> dans ce chemin
                         iframes = main_section.find_all("iframe")
-                        iframe_links = [iframe.get("src") for iframe in iframes if iframe.get("src")]
+                        
+                        # Filtrer les liens qui commencent par le chemin spécifique
+                        iframe_links = [
+                            iframe.get("src") for iframe in iframes 
+                            if iframe.get("src") and iframe.get("src").startswith("https://ovh.slgnt.eu/optiext/")
+                        ]
                         return iframe_links
             return []
         else:
@@ -51,8 +55,8 @@ def extract_urls_from_sitemap(sitemap_url):
         return []
 
 # Streamlit app
-st.title("Extraction des liens d'iframes (contenu spécifique)")
-st.markdown("Cette application extrait les liens `<iframe>` uniquement situés dans `//body/div/div/main/`.")
+st.title("Extraction des liens d'iframes spécifiques")
+st.markdown("Cette application extrait uniquement les liens `<iframe>` situés dans `//body/div/div/main/`, correspondant à un modèle spécifique (`https://ovh.slgnt.eu/optiext/`).")
 
 # Récupérer le type d'entrée de l'utilisateur
 input_type = st.radio("Fournissez une source : ", ["Sitemaps XML", "Liste d'URLs"])
