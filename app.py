@@ -1,42 +1,97 @@
 import streamlit as st
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
-import time
+import requests
+import re
+from bs4 import BeautifulSoup
+import pandas as pd
 
-# Function to fetch the Featured Snippet content
-def fetch_featured_snippet_with_xpath(keyword, xpath):
-    # Configure Selenium WebDriver
-    options = webdriver.FirefoxOptions()
-    options.add_argument("--headless")  # Run without opening the browser
-    options.add_argument("--disable-gpu")
-    
-    # Start the WebDriver
-    driver = webdriver.Firefox(service=Service(ChromeDriverManager().install()), options=options)
-    url = f"https://www.google.com/search?q={keyword}"
-    driver.get(url)
-    time.sleep(2)  # Wait for the page to load
-    
+# Regex pour extraire les liens des iframes
+IFRAME_REGEX = r'<iframe[^>]*src=["\']([^"\']+)["\']'
+
+# Fonction pour extraire les URLs des iframes d'une page web
+def extract_iframe_links(url):
     try:
-        # Locate the Featured Snippet using XPath
-        snippet = driver.find_element(By.XPATH, xpath)
-        content = snippet.text
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            html_content = response.text
+            iframe_links = re.findall(IFRAME_REGEX, html_content)
+            return iframe_links
+        else:
+            return []
     except Exception as e:
-        content = f"Error: {str(e)}. No Featured Snippet found."
-    
-    driver.quit()  # Close the browser
-    return content
+        st.warning(f"Erreur pour {url}: {e}")
+        return []
 
-# Streamlit UI
-st.title("Extract Google Featured Snippet Text Using XPath")
-keyword = st.text_input("Enter a keyword (e.g., 'vps'):")
-xpath = st.text_input(
-    "Enter the XPath for the Featured Snippet (default provided):",
-    value="/html/body/div[3]/div/div[13]/div[1]/div[2]/div/div/div[1]/div/div/div[1]/div/div[1]/block-component/div/div[1]/div/div/div/div/div[1]/div/div/div/div/div[1]/div"
+# Fonction pour extraire toutes les URLs d'un sitemap
+def extract_urls_from_sitemap(sitemap_url):
+    try:
+        response = requests.get(sitemap_url, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, "xml")
+            urls = [loc.text for loc in soup.find_all("loc")]
+            return urls
+        else:
+            st.warning(f"Impossible d'accéder au sitemap : {sitemap_url}")
+            return []
+    except Exception as e:
+        st.warning(f"Erreur avec le sitemap {sitemap_url}: {e}")
+        return []
+
+# Streamlit app
+st.title("Extraction des liens d'iframes")
+st.markdown(
+    """
+    Cette application extrait les liens contenus dans les balises `<iframe>` d'une ou plusieurs pages web.
+    Vous pouvez fournir un ou plusieurs **sitemaps XML** ou une **liste d'URLs**.
+    """
 )
 
-if st.button("Extract Featured Snippet"):
-    result = fetch_featured_snippet_with_xpath(keyword, xpath)
-    st.subheader("Featured Snippet Content:")
-    st.write(result)
+# Input pour les URLs ou sitemaps
+input_type = st.radio("Fournissez une source : ", ["Sitemaps XML", "Liste d'URLs"])
+
+if input_type == "Sitemaps XML":
+    sitemap_urls = st.text_area(
+        "Entrez les URLs des sitemaps XML (une URL par ligne) :",
+        placeholder="Exemple : https://example.com/sitemap.xml",
+    ).splitlines()
+    sitemap_urls = [url.strip() for url in sitemap_urls if url.strip()]
+else:
+    urls = st.text_area(
+        "Entrez les URLs (une URL par ligne) :",
+        placeholder="Exemple : https://example.com/page1",
+    ).splitlines()
+    urls = [url.strip() for url in urls if url.strip()]
+
+# Bouton pour lancer l'extraction
+if st.button("Extraire les liens d'iframes"):
+    all_iframe_links = []
+    processed_urls = []
+
+    if input_type == "Sitemaps XML":
+        # Extraire les URLs des sitemaps
+        for sitemap_url in sitemap_urls:
+            st.info(f"Extraction des URLs du sitemap : {sitemap_url}")
+            urls_from_sitemap = extract_urls_from_sitemap(sitemap_url)
+            processed_urls.extend(urls_from_sitemap)
+    else:
+        processed_urls = urls
+
+    # Extraire les liens des iframes pour chaque URL
+    for url in processed_urls:
+        st.info(f"Analyse de la page : {url}")
+        iframe_links = extract_iframe_links(url)
+        for iframe_link in iframe_links:
+            all_iframe_links.append({"from": url, "iframe_link": iframe_link})
+
+    # Créer un tableau des résultats
+    if all_iframe_links:
+        df = pd.DataFrame(all_iframe_links, columns=["from", "iframe_link"])
+        st.success(f"Extraction terminée ! {len(all_iframe_links)} liens d'iframes trouvés.")
+        st.dataframe(df)
+        st.download_button(
+            label="Télécharger les résultats en CSV",
+            data=df.to_csv(index=False),
+            file_name="iframe_links.csv",
+            mime="text/csv",
+        )
+    else:
+        st.warning("Aucun lien d'iframe trouvé.")
