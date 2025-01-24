@@ -25,7 +25,8 @@ def extract_urls_from_sitemap(sitemap_url):
     try:
         response = requests.get(sitemap_url, timeout=10)
         if response.status_code == 200:
-            soup = BeautifulSoup(response.content, "xml")
+            # Utiliser le parser lxml pour lire les sitemaps XML
+            soup = BeautifulSoup(response.content, "lxml")
             urls = [loc.text for loc in soup.find_all("loc")]
             return urls
         else:
