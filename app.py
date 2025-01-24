@@ -1,99 +1,38 @@
-import streamlit as st
-import requests
-import re
-from bs4 import BeautifulSoup
+if results:
+    # Nettoyage des résultats pour éviter les problèmes de séparation
+    clean_results = []
+    iframe_usage_count = {}
 
-# Regex pour extraire les liens d'iframes
-IFRAME_REGEX = r'<iframe[^>]*src=["\']([^"\']+)["\']'
-
-# Fonction pour extraire les liens iframe d'une URL
-def extract_iframe_links(url):
-    try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            html_content = response.text
-            iframe_links = re.findall(IFRAME_REGEX, html_content)
-            return iframe_links
+    # Comptabiliser les occurrences des liens iframe
+    for from_url, iframe_link in results:
+        iframe_link = iframe_link.replace("&amp;", "&")  # Nettoyage des entités HTML
+        clean_results.append((from_url, iframe_link))
+        if iframe_link in iframe_usage_count:
+            iframe_usage_count[iframe_link] += 1
         else:
-            return []
-    except Exception as e:
-        st.warning(f"Erreur pour {url}: {e}")
-        return []
+            iframe_usage_count[iframe_link] = 1
 
-# Fonction pour extraire toutes les URLs des sitemaps
-def extract_urls_from_sitemap(sitemap_url):
-    try:
-        response = requests.get(sitemap_url, timeout=10)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, "xml")
-            urls = [loc.text for loc in soup.find_all("loc")]
-            return urls
-        else:
-            st.warning(f"Impossible d'accéder au sitemap : {sitemap_url}")
-            return []
-    except Exception as e:
-        st.warning(f"Erreur avec le sitemap {sitemap_url}: {e}")
-        return []
+    # Ajouter une colonne pour le nombre d'utilisations
+    enriched_results = [
+        {"From": row[0], "Iframe Link": row[1], "Usage Count": iframe_usage_count[row[1]]}
+        for row in clean_results
+    ]
 
-# Streamlit app
-st.title("Extraction des liens d'iframes")
-st.markdown("Cette application extrait les liens contenus dans les balises `<iframe>` d'une ou plusieurs pages web.")
+    st.success(f"Extraction terminée ! {len(enriched_results)} liens d'iframes trouvés.")
+    st.markdown("### Résultats")
 
-# Vérifiez que l'utilisateur fournit une entrée valide
-input_type = st.radio("Fournissez une source : ", ["Sitemaps XML", "Liste d'URLs"], key="input_type")
+    # Affichage sous forme de tableau enrichi
+    st.table(enriched_results)
 
-if input_type:
-    if input_type == "Sitemaps XML":
-        sitemap_urls = st.text_area(
-            "Entrez les URLs des sitemaps XML (une URL par ligne) :",
-            placeholder="https://example.com/sitemap.xml",
-        ).splitlines()
-        sitemap_urls = [url.strip() for url in sitemap_urls if url.strip()]
-    else:
-        urls = st.text_area(
-            "Entrez les URLs (une URL par ligne) :",
-            placeholder="https://example.com/page1",
-        ).splitlines()
-        urls = [url.strip() for url in urls if url.strip()]
-
-    # Lancer l'extraction
-    if st.button("Extraire les liens d'iframes"):
-        results = []
-        processed_urls = []
-
-        if input_type == "Sitemaps XML":
-            for sitemap_url in sitemap_urls:
-                st.info(f"Extraction des URLs du sitemap : {sitemap_url}")
-                urls_from_sitemap = extract_urls_from_sitemap(sitemap_url)
-                processed_urls.extend(urls_from_sitemap)
-        else:
-            processed_urls = urls
-
-        # Vérifier si processed_urls est vide
-        if not processed_urls:
-            st.warning("Aucune URL à traiter. Veuillez entrer des sitemaps ou des URLs.")
-        else:
-            for url in processed_urls:
-                st.info(f"Analyse de la page : {url}")
-                iframe_links = extract_iframe_links(url)
-                for iframe_link in iframe_links:
-                    results.append((url, iframe_link))
-
-            # Déduplication des résultats
-            results = list(set(results))
-
-            # Afficher les résultats
-            if results:
-                st.success(f"Extraction terminée ! {len(results)} liens d'iframes trouvés.")
-                st.markdown("### Résultats")
-                for from_url, iframe_link in results:
-                    st.write(f"- **From:** {from_url}")
-                    st.write(f"  - **Iframe Link:** {iframe_link}")
-                st.download_button(
-                    label="Télécharger les résultats en CSV",
-                    data="\n".join([f"{from_url},{iframe_link}" for from_url, iframe_link in results]),
-                    file_name="iframe_links.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.warning("Aucun lien d'iframe trouvé.")
+    # Téléchargement en CSV avec la nouvelle colonne
+    csv_data = "From,Iframe Link,Usage Count\n" + "\n".join(
+        [f"{row['From']},{row['Iframe Link']},{row['Usage Count']}" for row in enriched_results]
+    )
+    st.download_button(
+        label="Télécharger les résultats en CSV",
+        data=csv_data,
+        file_name="iframe_links_with_usage_count.csv",
+        mime="text/csv",
+    )
+else:
+    st.warning("Aucun lien d'iframe trouvé.")
