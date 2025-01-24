@@ -74,11 +74,18 @@ if input_type:
         if not processed_urls:
             st.warning("Aucune URL à traiter. Veuillez entrer des sitemaps ou des URLs.")
         else:
-            for url in processed_urls:
-                st.info(f"Analyse de la page : {url}")
+            # Barre de progression
+            progress_bar = st.progress(0)
+            total_urls = len(processed_urls)
+
+            for idx, url in enumerate(processed_urls, start=1):
+                # Analyse de chaque page
                 iframe_links = extract_iframe_links(url)
                 for iframe_link in iframe_links:
                     results.append((url, iframe_link))
+
+                # Mise à jour de la barre de progression
+                progress_bar.progress(idx / total_urls)
 
             # Déduplication des résultats
             results = list(set(results))
