@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import re
 from bs4 import BeautifulSoup
+import csv
+from io import StringIO
 
 # Regex pour extraire les liens d'iframes
 IFRAME_REGEX = r'<iframe[^>]*src=["\']([^"\']+)["\']'
@@ -12,7 +14,21 @@ def extract_iframe_links(url):
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             html_content = response.text
-            iframe_links = re.findall(IFRAME_REGEX, html_content)
+            soup = BeautifulSoup(html_content, "html.parser")
+            
+            # Extraire uniquement le contenu de la balise <body>
+            body = soup.find("body")
+            if not body:
+                return []
+            
+            # Exclure les iframes présents dans des balises <nav> (menu) ou <footer>
+            excluded_sections = body.find_all(["nav", "footer"])
+            for section in excluded_sections:
+                section.decompose()  # Supprimer ces sections du DOM
+            
+            # Extraire les liens <iframe> restants dans le body
+            iframes = body.find_all("iframe")
+            iframe_links = [iframe.get("src") for iframe in iframes if iframe.get("src")]
             return iframe_links
         else:
             return []
@@ -102,18 +118,22 @@ if input_type:
                 for row in results
             ]
 
-            # Affichage des résultats
-            st.success(f"Extraction terminée ! {len(enriched_results)} liens d'iframes trouvés.")
-            st.markdown("### Résultats")
-            st.table(enriched_results)
+            # Création du CSV
+            output = StringIO()
+            writer = csv.DictWriter(output, fieldnames=["From", "Iframe Link", "Usage Count"], quoting=csv.QUOTE_ALL)
+            writer.writeheader()
+            writer.writerows(enriched_results)
+            csv_data = output.getvalue()
 
-            # Téléchargement en CSV
-            csv_data = "From,Iframe Link,Usage Count\n" + "\n".join(
-                [f"{row['From']},{row['Iframe Link']},{row['Usage Count']}" for row in enriched_results]
-            )
+            # Bouton de téléchargement
             st.download_button(
                 label="Télécharger les résultats en CSV",
                 data=csv_data,
                 file_name="iframe_links_with_usage_count.csv",
                 mime="text/csv",
             )
+
+            # Affichage des résultats
+            st.success(f"Extraction terminée ! {len(enriched_results)} liens d'iframes trouvés.")
+            st.markdown("### Résultats")
+            st.table(enriched_results)
