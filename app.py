@@ -184,109 +184,106 @@ def save_to_history(results: List[Dict], input_urls: List[str], parameters: Dict
 
 
 def display_extraction_tab():
-    """Affiche et gère l'onglet d'extraction"""
     st.markdown("""
-    Cette application extrait les iframes du chemin `//body/div/div/main/` 
-    qui commencent par `https://ovh.slgnt.eu/optiext/`.
+    This application extracts iframes from the path `//body/div/div/main/` 
+    that start with `https://ovh.slgnt.eu/optiext/`.
     """)
 
     col1, col2 = st.columns([2, 1])
 
     with col1:
         input_type = st.radio(
-            "Type d'entrée :",
-            ["Sitemaps XML", "Liste d'URLs"]
+            "Input type:",
+            ["XML Sitemaps", "URLs List"]
         )
 
-        if input_type == "Sitemaps XML":
+        if input_type == "XML Sitemaps":
             urls_input = st.text_area(
-                "URLs des sitemaps (une par ligne) :",
+                "Sitemap URLs (one per line):",
                 placeholder="https://example.com/sitemap.xml",
                 height=200
             )
         else:
             urls_input = st.text_area(
-                "URLs à analyser (une par ligne) :",
+                "URLs to analyze (one per line):",
                 placeholder="https://example.com/page1",
                 height=200
             )
 
     with col2:
         st.markdown("### Configuration")
-        with st.expander("Paramètres avancés"):
+        with st.expander("Advanced settings"):
             global MAX_WORKERS, TIMEOUT, CHUNK_SIZE
 
             # Mode test
-            test_mode = st.checkbox("Activer le mode test", False)
+            test_mode = st.checkbox("Enable test mode", False)
             test_urls = None
             if test_mode:
                 test_urls = st.number_input(
-                    "Nombre d'URLs à tester",
+                    "Number of URLs to test",
                     min_value=1,
                     max_value=1000,
                     value=10,
-                    help="Limite le nombre d'URLs à traiter pour les tests"
+                    help="Limit the number of URLs to process for testing"
                 )
 
             # Autres paramètres
-            MAX_WORKERS = st.slider("Nombre de workers", 1, 20, 10)
-            TIMEOUT = st.slider("Timeout (secondes)", 1, 15, 5)
-            CHUNK_SIZE = st.slider("Taille des lots", 10, 100, 50)
+            MAX_WORKERS = st.slider("Number of workers", 1, 20, 10)
+            TIMEOUT = st.slider("Timeout (seconds)", 1, 15, 5)
+            CHUNK_SIZE = st.slider("Batch size", 10, 100, 50)
 
     urls = [url.strip() for url in urls_input.splitlines() if url.strip()]
 
     # Bouton aligné à gauche
     col1, col2 = st.columns([1, 3])
     with col1:
-        start_extraction = st.button("Extraire les iframes", type="primary")
+        start_extraction = st.button("Extract iframes", type="primary")
 
     # La suite en pleine largeur
     if start_extraction:
         if not urls:
-            st.warning("⚠️ Veuillez entrer au moins une URL.")
+            st.warning("⚠️ Please enter at least one URL.")
             return
 
-        with st.spinner("🔄 Traitement en cours..."):
+        with st.spinner("🔄 Processing..."):
             start_time = time.time()
             results = []
             processed_urls = []
 
             # Traitement des sitemaps
-            if input_type == "Sitemaps XML":
+            if input_type == "XML Sitemaps":
                 status_sitemap = st.empty()
                 progress_sitemap = st.progress(0)
 
                 for idx, sitemap_url in enumerate(urls):
                     status_sitemap.write(
-                        f"📑 Lecture du sitemap: {sitemap_url}")
+                        f"📑 Reading sitemap: {sitemap_url}")
                     sitemap_urls = extract_urls_from_sitemap(sitemap_url)
                     processed_urls.extend(sitemap_urls)
                     progress_sitemap.progress((idx + 1) / len(urls))
 
                 if processed_urls:
-                    st.success(f"✅ {len(processed_urls)
-                                    } URLs extraites des sitemaps")
+                    st.success(f"✅ {len(processed_urls)} URLs extracted from sitemaps")
                 else:
-                    st.error("❌ Aucune URL trouvée dans les sitemaps")
+                    st.error("❌ No URLs found in sitemaps")
                     return
             else:
                 processed_urls = urls
 
             # Application du mode test si activé
             if test_mode and test_urls and len(processed_urls) > test_urls:
-                st.info(f"🧪 Mode test activé : sélection aléatoire de {test_urls} URLs")
+                st.info(f"🧪 Test mode enabled: randomly selecting {test_urls} URLs")
                 processed_urls = random.sample(processed_urls, test_urls)
 
             # Traitement des URLs
             if processed_urls:
                 status = st.empty()
                 progress = st.progress(0)
-                status.write(f"🔍 Analyse de {len(processed_urls)} URLs...")
+                status.write(f"🔍 Analyzing {len(processed_urls)} URLs...")
 
                 for i in range(0, len(processed_urls), CHUNK_SIZE):
                     chunk = processed_urls[i:i + CHUNK_SIZE]
-                    status.write(f"🔍 Traitement du lot {
-                                 i//CHUNK_SIZE + 1}/{len(processed_urls)//CHUNK_SIZE + 1}")
+                    status.write(f"🔍 Processing batch {i//CHUNK_SIZE + 1}/{len(processed_urls)//CHUNK_SIZE + 1}")
                     chunk_results = process_urls_batch(chunk, progress)
                     results.extend(chunk_results)
 
@@ -305,67 +302,63 @@ def display_extraction_tab():
                     save_to_history(results, urls, parameters, execution_time)
 
                     st.success(f"""
-                    ✨ Extraction terminée en {execution_time:.2f} secondes !
-                    - 📊 {len(processed_urls)} URLs analysées
-                    - 🎯 {len(results)} iframes trouvés
+                    ✨ Extraction completed in {execution_time:.2f} seconds!
+                    - 📊 {len(processed_urls)} URLs analyzed
+                    - 🎯 {len(results)} iframes found
                     """)
 
                     # Aperçu des résultats
-                    st.markdown("### Aperçu des résultats")
-                    with st.expander("👀 Voir les données extraites", expanded=True):
+                    st.markdown("### Results preview")
+                    with st.expander("👀 View extracted data", expanded=True):
                         df = pd.DataFrame(results)
                         st.dataframe(
                             df[['URL source', 'Form ID', 'CRM Campaign']].head(10),
                             use_container_width=True
                         )
                         if len(results) > 10:
-                            st.info(f"... et {len(results) - 10} autres résultats")
+                            st.info(f"... and {len(results) - 10} more results")
                     
                     # Message pour rediriger vers l'analyse
-                    st.info("💡 Rendez-vous dans l'onglet **Analyse** pour une analyse complète de l'extraction !")
+                    st.info("💡 Go to the **Analysis** tab for a complete analysis!")
 
                 else:
-                    st.info("ℹ️ Aucun iframe trouvé.")
+                    st.info("ℹ️ No iframes found.")
 
 
 def display_analysis_tab():
-    """Affiche l'onglet d'analyse avec une meilleure expérience utilisateur"""
     if not st.session_state.extraction_results:
-        st.info("ℹ️ Veuillez d'abord extraire des iframes dans l'onglet Extraction.")
+        st.info("ℹ️ Please extract iframes first in the Extraction tab.")
         return
 
-    # En-tête avec stats rapides
-    st.header("🔍 Analyse des formulaires", divider="rainbow")
+    st.header("🔍 Form Analysis", divider="rainbow")
     
     total_forms = len(st.session_state.extraction_results)
-    st.caption(f"Dernière extraction : {total_forms} formulaires trouvés")
+    st.caption(f"Last extraction: {total_forms} forms found")
 
-    # Configuration dans une sidebar pour plus d'espace
     with st.sidebar:
-        st.subheader("⚙️ Configuration de l'analyse")
-        use_mapping = st.toggle("Utiliser un mapping CRM", value=False)
+        st.subheader("⚙️ Analysis Configuration")
+        use_mapping = st.toggle("Use CRM mapping", value=False)
         
         mapping_data = None
         if use_mapping:
             mapping_file = st.file_uploader(
-                "Fichier de mapping CRM (Excel)",
+                "CRM mapping file (Excel)",
                 type=['xlsx'],
-                help="Format attendu : colonnes 'ID' et 'CRM_CAMPAIGN'"
+                help="Expected format: columns 'ID' and 'CRM_CAMPAIGN'"
             )
             if mapping_file:
                 try:
                     mapping_data = pd.read_excel(mapping_file)
-                    st.success(f"✅ {len(mapping_data)} mappings chargés")
+                    st.success(f"✅ {len(mapping_data)} mappings loaded")
                 except Exception as e:
-                    st.error("❌ Erreur de format")
+                    st.error("❌ Format error")
 
-    # Analyse des données si pas encore fait
     if st.session_state.analyzed_df is None:
-        st.warning("⚠️ Cliquez sur 'Lancer l'analyse' pour commencer")
+        st.warning("⚠️ Click 'Start analysis' to begin")
         col1, col2 = st.columns([1, 3])
         with col1:
-            if st.button("📊 Lancer l'analyse", type="primary"):
-                with st.spinner("Analyse en cours..."):
+            if st.button("📊 Start analysis", type="primary"):
+                with st.spinner("Analyzing..."):
                     analyzed_df = analyze_crm_data(
                         st.session_state.extraction_results,
                         mapping_data
@@ -377,26 +370,22 @@ def display_analysis_tab():
                             lambda x: get_template_name(x, template_mapping)
                         )
                     st.session_state.analyzed_df = analyzed_df
-                    st.rerun()  # Changed from st.experimental_rerun()
+                    st.rerun()
         return
 
-    # Récupération des données analysées
     analyzed_df = st.session_state.analyzed_df
 
-    # Création de 3 onglets pour une meilleure organisation
     summary_tab, details_tab, export_tab = st.tabs([
-        "📈 Synthèse", "🔎 Détails", "💾 Export"
+        "📈 Summary", "🔎 Details", "💾 Export"
     ])
 
     with summary_tab:
-        # Métriques principales en colonnes
-        col1, col2, col3, col4 = st.columns(4)  # Retour à 4 colonnes
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total formulaires", total_forms)
+            st.metric("Total forms", total_forms)
 
-        # Remplacer la métrique simple par un conteneur détaillé
         with col2:
-            st.markdown("#### Formulaires uniques")
+            st.markdown("#### Unique forms")
             total_unique = analyzed_df['Form ID'].nunique()
             templated = analyzed_df[analyzed_df['Template'].notna()]['Form ID'].nunique() if 'Template' in analyzed_df else 0
             not_templated = total_unique - templated
@@ -404,40 +393,36 @@ def display_analysis_tab():
             st.metric("Total", total_unique)
             mc1, mc2 = st.columns(2)
             with mc1:
-                st.metric("Templatisés", templated)
+                st.metric("Templated", templated)
             with mc2:
-                st.metric("Non templatisés", not_templated)
+                st.metric("Non-templated", not_templated)
 
         with col3:
-            st.metric("Avec code CRM", analyzed_df['CRM Campaign'].notna().sum())
+            st.metric("With CRM code", analyzed_df['CRM Campaign'].notna().sum())
         with col4:
-            st.metric("Sans code CRM", analyzed_df['CRM Campaign'].isna().sum())
+            st.metric("Without CRM code", analyzed_df['CRM Campaign'].isna().sum())
 
-        # Section alertes (suppression de la visualisation des templates)
-        st.subheader("⚠️ Points d'attention", divider="red")
+        st.subheader("⚠️ Points of attention", divider="red")
         alerts = []
         
-        # Mauvaises intégrations
         bad_integration = analyzed_df[analyzed_df['Iframe'].str.contains("survey.dll", na=False)]
         if not bad_integration.empty:
             alerts.append({
                 "severity": "error",
-                "title": "Mauvaises intégrations",
-                "message": f"{len(bad_integration)} formulaires mal intégrés détectés",
+                "title": "Bad integrations",
+                "message": f"{len(bad_integration)} forms with incorrect integration detected",
                 "data": bad_integration[['URL source', 'Iframe']]
             })
 
-        # CRM manquants
         missing_crm = analyzed_df[analyzed_df['CRM Campaign'].isna()]
         if not missing_crm.empty:
             alerts.append({
                 "severity": "warning",
-                "title": "Codes CRM manquants",
-                "message": f"{len(missing_crm)} formulaires sans code CRM",
+                "title": "Missing CRM codes",
+                "message": f"{len(missing_crm)} forms without CRM code",
                 "data": missing_crm[['URL source', 'Form ID']]
             })
 
-        # Affichage des alertes
         if alerts:
             for alert in alerts:
                 with st.expander(f"🔔 {alert['title']}"):
@@ -453,35 +438,32 @@ def display_analysis_tab():
                         }
                     )
         else:
-            st.success("✅ Aucune anomalie détectée")
+            st.success("✅ No anomalies detected")
 
     with details_tab:
-        st.subheader("📑 Données détaillées")
+        st.subheader("📑 Detailed data")
         
-        # Filtres
         col1, col2 = st.columns(2)
         with col1:
             template_filter = st.multiselect(
-                "Filtrer par template",
+                "Filter by template",
                 options=analyzed_df['Template'].unique() if 'Template' in analyzed_df.columns else []
             )
         with col2:
             crm_filter = st.radio(
-                "Statut CRM",
-                ["Tous", "Avec CRM", "Sans CRM"]
+                "CRM status",
+                ["All", "With CRM", "Without CRM"]
             )
 
-        # Application des filtres
         filtered_df = analyzed_df.copy()
         if template_filter:
             filtered_df = filtered_df[filtered_df['Template'].isin(template_filter)]
-        if crm_filter == "Avec CRM":
+        if crm_filter == "With CRM":
             filtered_df = filtered_df[filtered_df['CRM Campaign'].notna()]
-        elif crm_filter == "Sans CRM":
+        elif crm_filter == "Without CRM":
             filtered_df = filtered_df[filtered_df['CRM Campaign'].isna()]
 
-        # Affichage données filtrées avec métrique
-        st.metric("Résultats filtrés", len(filtered_df))
+        st.metric("Filtered results", len(filtered_df))
         st.dataframe(
             filtered_df,
             use_container_width=True,
@@ -491,10 +473,10 @@ def display_analysis_tab():
         )
 
     with export_tab:
-        st.subheader("💾 Exporter les résultats")
+        st.subheader("💾 Export results")
         
         export_format = st.radio(
-            "Format d'export",
+            "Export format",
             ["CSV", "Excel"]
         )
 
@@ -504,9 +486,9 @@ def display_analysis_tab():
                 output = StringIO()
                 analyzed_df.to_csv(output, index=False)
                 st.download_button(
-                    "📥 Télécharger l'analyse (CSV)",
+                    "📥 Download analysis (CSV)",
                     output.getvalue(),
-                    "analyse_formulaires.csv",
+                    "forms_analysis.csv",
                     "text/csv"
                 )
             else:
@@ -514,102 +496,89 @@ def display_analysis_tab():
                 analyzed_df.to_excel(output, engine='openpyxl', index=False)
                 output.seek(0)
                 st.download_button(
-                    "📥 Télécharger l'analyse (Excel)",
+                    "📥 Download analysis (Excel)",
                     output.getvalue(),
-                    "analyse_formulaires.xlsx",
+                    "forms_analysis.xlsx",
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-    # Bouton pour réinitialiser l'analyse déplacé en haut de la sidebar
     with st.sidebar:
-        if st.button("🔄 Réinitialiser l'analyse"):
+        if st.button("🔄 Reset analysis"):
             st.session_state.analyzed_df = None
-            st.rerun()  # Changed from st.experimental_rerun()
+            st.rerun()
 
 
 def display_history_tab():
-    """Affiche l'onglet historique"""
     if not st.session_state.history:
-        st.info("Aucune extraction n'a encore été effectuée.")
+        st.info("No extractions have been performed yet.")
     else:
-        st.markdown("### Historique des extractions")
+        st.markdown("### Extraction history")
 
-        # Affichage du tableau récapitulatif
         history_data = []
         for idx, entry in enumerate(reversed(st.session_state.history)):
             history_data.append({
                 "Date": entry["timestamp"],
-                "URLs sources": entry["nb_input_urls"],
-                "Iframes trouvés": entry["nb_iframes_found"],
-                "Durée (s)": f"{entry['execution_time']:.2f}",
-                "Mode test": "✓" if entry["parameters"]["test_mode"] else "✗",
+                "Source URLs": entry["nb_input_urls"],
+                "Iframes found": entry["nb_iframes_found"],
+                "Duration (s)": f"{entry['execution_time']:.2f}",
+                "Test mode": "✓" if entry["parameters"]["test_mode"] else "✗",
             })
 
         history_df = pd.DataFrame(history_data)
         st.dataframe(history_df, use_container_width=True)
 
-        # Sélection d'une extraction pour plus de détails
         selected_idx = st.selectbox(
-            "Sélectionner une extraction pour voir les détails",
+            "Select an extraction to view details",
             range(len(st.session_state.history)),
-            format_func=lambda x: f"{
-                st.session_state.history[-(x+1)]['timestamp']}"
+            format_func=lambda x: f"{st.session_state.history[-(x+1)]['timestamp']}"
         )
 
         if selected_idx is not None:
             entry = st.session_state.history[-(selected_idx+1)]
 
-            # Affichage des détails
-            st.markdown("### Détails de l'extraction")
+            st.markdown("### Extraction details")
 
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("URLs analysées", entry["nb_input_urls"])
+                st.metric("URLs analyzed", entry["nb_input_urls"])
             with col2:
-                st.metric("Iframes trouvés", entry["nb_iframes_found"])
+                st.metric("Iframes found", entry["nb_iframes_found"])
             with col3:
-                st.metric("Durée", f"{entry['execution_time']:.2f}s")
+                st.metric("Duration", f"{entry['execution_time']:.2f}s")
 
-            # Paramètres utilisés
-            st.markdown("#### Paramètres")
+            st.markdown("#### Parameters")
             params = entry["parameters"]
             st.json(params)
 
-            # URLs sources
-            st.markdown("#### URLs sources")
+            st.markdown("#### Source URLs")
             st.write(entry["input_urls"])
 
-            # Actions sur l'extraction
             col1, col2 = st.columns([1, 3])
             with col1:
-                if st.button("Recharger cette extraction", key=f"reload_{selected_idx}"):
+                if st.button("Reload this extraction", key=f"reload_{selected_idx}"):
                     st.session_state.extraction_results = entry["results"]
                     st.success(
-                        "✨ Extraction rechargée! Vous pouvez maintenant l'analyser dans l'onglet 'Analyse'")
+                        "✨ Extraction reloaded! You can now analyze it in the 'Analysis' tab")
 
             with col1:
-                # Export des résultats
                 output = StringIO()
                 df = pd.DataFrame(entry["results"])
                 df.to_csv(output, index=False)
                 st.download_button(
-                    "📥 Télécharger les résultats (CSV)",
+                    "📥 Download results (CSV)",
                     output.getvalue(),
-                    f"resultats_extraction_{
-                        entry['timestamp'].replace(' ', '_')}.csv",
+                    f"extraction_results_{entry['timestamp'].replace(' ', '_')}.csv",
                     "text/csv"
                 )
 
 
 def display_share_tab():
-    """Affiche l'onglet de partage avec modèle d'email"""
-    if st.session_state.analyzed_df is None:  # Changed from "if not st.session_state.analyzed_df:"
-        st.info("ℹ️ Veuillez d'abord analyser des données dans l'onglet Analyse.")
+    if st.session_state.analyzed_df is None:
+        st.info("ℹ️ Please analyze data first in the Analysis tab.")
         return
 
-    st.header("📧 Partager l'analyse", divider="rainbow")
+    st.header("📧 Share Analysis", divider="rainbow")
     
-    # Récupération des métriques clés
     df = st.session_state.analyzed_df
     total_forms = len(df)
     unique_forms = df['Form ID'].nunique()
@@ -617,73 +586,67 @@ def display_share_tab():
     with_crm = df['CRM Campaign'].notna().sum()
     without_crm = df['CRM Campaign'].isna().sum()
 
-    # Génération du modèle d'email
-    st.subheader("📝 Modèle d'email")
+    st.subheader("📝 Email template")
     
-    subject = f"Rapport d'analyse des formulaires - {time.strftime('%d/%m/%Y')}"
-    body = f"""Bonjour,
+    subject = f"Forms Analysis Report - {time.strftime('%d/%m/%Y')}"
+    body = f"""Hello,
 
-Je vous partage les résultats de l'analyse des formulaires :
+Here are the results of the forms analysis:
 
-SYNTHÈSE :
-• {total_forms} formulaires analysés au total
-• {unique_forms} formulaires uniques identifiés
-  - dont {templated} formulaires templatisés
-  - dont {unique_forms - templated} formulaires non templatisés
-• {with_crm} formulaires avec code CRM
-• {without_crm} formulaires sans code CRM
+SUMMARY:
+• {total_forms} total forms analyzed
+• {unique_forms} unique forms identified
+  - including {templated} templated forms
+  - including {unique_forms - templated} non-templated forms
+• {with_crm} forms with CRM code
+• {without_crm} forms without CRM code
 
-POINTS D'ATTENTION :"""
+ATTENTION POINTS:"""
 
-    # Ajout des alertes si présentes
     bad_integration = df[df['Iframe'].str.contains("survey.dll", na=False)]
     if not bad_integration.empty:
-        body += f"\n• ⚠️ {len(bad_integration)} formulaires mal intégrés détectés"
+        body += f"\n• ⚠️ {len(bad_integration)} forms with incorrect integration"
     
     if without_crm > 0:
-        body += f"\n• ⚠️ {without_crm} formulaires sans remontée CRM"
+        body += f"\n• ⚠️ {without_crm} forms without CRM tracking"
 
-    body += "\n\nCordialement"
+    body += "\n\nBest regards"
 
-    # Affichage et copie
     col1, col2 = st.columns(2)
     with col1:
-        st.text_input("Objet", value=subject)
-        st.text_area("Corps du message", value=body, height=400)
+        st.text_input("Subject", value=subject)
+        st.text_area("Message body", value=body, height=400)
         
     with col2:
         st.markdown("### 📋 Instructions")
         st.markdown("""
-        1. Copiez l'objet et le corps du message
-        2. Personnalisez le contenu selon vos besoins
-        3. N'oubliez pas de joindre l'export Excel/CSV de l'analyse
+        1. Copy the subject and message body
+        2. Customize the content as needed
+        3. Don't forget to attach the Excel/CSV export
         
-        **Note :** Les données sont formatées pour une meilleure lisibilité dans un client email.
+        **Note:** Data is formatted for better readability in email clients.
         """)
         
-        # Boutons de copie rapide
-        st.button("📋 Copier l'objet", key="copy_subject", 
-                 help="Copie l'objet dans le presse-papier",
-                 on_click=lambda: st.write("Objet copié !"))
-        st.button("📋 Copier le message", key="copy_body",
-                 help="Copie le corps du message dans le presse-papier",
-                 on_click=lambda: st.write("Message copié !"))
+        st.button("📋 Copy subject", key="copy_subject", 
+                 help="Copy the subject to clipboard",
+                 on_click=lambda: st.write("Subject copied!"))
+        st.button("📋 Copy message", key="copy_body",
+                 help="Copy the message body to clipboard",
+                 on_click=lambda: st.write("Message copied!"))
 
 
 def main():
     st.set_page_config(
-        page_title="Extracteur d'iframes avec analyse CRM",
+        page_title="iframe Form Extractor with CRM Analysis",
         page_icon="🔍",
         layout="wide"
     )
 
-    st.title("Extraction et analyse des iframes")
+    st.title("iframe Forms Extractor and Analyzer")
 
-    # Initialisation des variables de session
     initialize_session_state()
 
-    # Interface principale
-    tabs = st.tabs(["Extraction", "Analyse", "Historique", "Partager"])  # Ajout du nouvel onglet
+    tabs = st.tabs(["Extraction", "Analysis", "History", "Share"])
 
     with tabs[0]:
         display_extraction_tab()
