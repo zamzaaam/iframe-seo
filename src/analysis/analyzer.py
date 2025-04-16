@@ -21,10 +21,17 @@ class IframeAnalyzer:
             return None
         return self.template_mapping.get(form_id)
 
-    def analyze_crm_data(self, results: List[Dict], mapping_data: Optional[pd.DataFrame] = None, 
-                        mapping_config: Optional[Dict] = None) -> pd.DataFrame:
+    def analyze_crm_data(self, 
+                        results: List[Dict], 
+                        url_mapping_data: Optional[pd.DataFrame] = None, 
+                        url_mapping_config: Optional[Dict] = None,
+                        crm_data: Optional[pd.DataFrame] = None,
+                        crm_mapping_config: Optional[Dict] = None) -> pd.DataFrame:
         """
-        Analyse les données CRM et applique le mapping personnalisé
+        Analyse les données en intégrant:
+        1. Les résultats d'extraction
+        2. Les données de mapping URL-Form (optionnel)
+        3. Les données CRM par code de campagne (optionnel)
         """
         # Filtrer les résultats vides
         results = [r for r in results if r.get('Iframe') and r.get('URL source') and r.get('Form ID')]
@@ -43,9 +50,19 @@ class IframeAnalyzer:
         if 'Form ID' in df.columns and self.template_mapping:
             df['Template'] = df['Form ID'].apply(self.get_template_name)
 
-        # Si pas de mapping, retourner simplement les données du scraping
-        if mapping_data is None or mapping_config is None:
-            return df
+        # === ÉTAPE 1: Appliquer le mapping URL si disponible ===
+        if url_mapping_data is not None and url_mapping_config is not None:
+            df = self._apply_url_mapping(df, url_mapping_data, url_mapping_config)
+        
+        # === ÉTAPE 2: Appliquer le mapping CRM si disponible ===
+        if crm_data is not None and crm_mapping_config is not None:
+            df = self._apply_crm_mapping(df, crm_data, crm_mapping_config)
+        
+        return df
+
+    def _apply_url_mapping(self, df: pd.DataFrame, mapping_data: pd.DataFrame, 
+                           mapping_config: Dict) -> pd.DataFrame:
+        """Applique le mapping basé sur les URLs et Form IDs"""
         
         # Préparation du mapping
         mapping_df = mapping_data.copy()
@@ -110,5 +127,42 @@ class IframeAnalyzer:
                         df.at[idx, col] = url_mapping[col][url]
                     elif form_id in id_mapping.get(col, {}):
                         df.at[idx, col] = id_mapping[col][form_id]
+        
+        return df
+
+    def _apply_crm_mapping(self, df: pd.DataFrame, crm_data: pd.DataFrame, 
+                          crm_mapping_config: Dict) -> pd.DataFrame:
+        """Applique le mapping basé sur les codes de campagne CRM"""
+        
+        if 'CRM Campaign' not in df.columns:
+            return df
+            
+        # Vérifier qu'il y a des codes CRM dans le DataFrame
+        if df['CRM Campaign'].isna().all():
+            return df
+            
+        # Récupérer la colonne contenant les codes CRM dans le fichier de mapping
+        crm_code_col = crm_mapping_config.get('crm_code_column')
+        if not crm_code_col or crm_code_col not in crm_data.columns:
+            return df
+            
+        # Colonnes à inclure depuis les données CRM
+        selected_columns = crm_mapping_config.get('selected_columns', [])
+        if not selected_columns:
+            return df
+            
+        # Créer un dictionnaire de mapping pour chaque colonne sélectionnée
+        crm_mappings = {}
+        for col in selected_columns:
+            if col != crm_code_col and col in crm_data.columns:
+                crm_mappings[col] = dict(zip(crm_data[crm_code_col], crm_data[col]))
+        
+        # Appliquer le mapping aux résultats
+        for col_name, mapping_dict in crm_mappings.items():
+            # Créer une nouvelle colonne avec préfixe CRM_
+            new_col_name = f"CRM_{col_name}"
+            
+            # Appliquer le mapping
+            df[new_col_name] = df['CRM Campaign'].map(mapping_dict)
         
         return df
