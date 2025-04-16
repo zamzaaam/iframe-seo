@@ -22,46 +22,44 @@ class IframeAnalyzer:
         return self.template_mapping.get(form_id)
 
     def analyze_crm_data(self, results: List[Dict], mapping_data: Optional[pd.DataFrame] = None, 
-                        selected_columns: Optional[List[str]] = None, id_column: str = 'ID') -> pd.DataFrame:
-        """Analyse les données CRM et applique le mapping
+                        mapping_config: Optional[Dict] = None) -> pd.DataFrame:
+        """
+        Analyse les données CRM et applique le mapping personnalisé
         
         Args:
             results: Résultats d'extraction d'iframes
-            mapping_data: DataFrame contenant les données de mapping
-            selected_columns: Liste des colonnes à inclure dans l'analyse
-            id_column: Nom de la colonne contenant les IDs dans le mapping_data
+            mapping_data: DataFrame contenant les données de mapping externes
+            mapping_config: Configuration du mapping avec:
+                - url_column: Nom de la colonne contenant les URLs dans mapping_data
+                - id_column: Nom de la colonne contenant les IDs dans mapping_data
+                - selected_columns: Liste des colonnes additionnelles à inclure
         """
         df = pd.DataFrame(results)
+        
+        # Extraction basique des codes CRM
         df['CRM Campaign'] = df['Iframe'].apply(
             lambda x: extract_id_and_code(x)[1])
 
-        if mapping_data is not None and not mapping_data.empty:
-            if 'Form ID' not in df.columns:
-                return df
+        if mapping_data is not None and mapping_config is not None:
+            # Création d'une clé de mapping unique (URL + Form ID)
+            df['mapping_key'] = df['URL source'] + '|' + df['Form ID']
+            mapping_data['mapping_key'] = (
+                mapping_data[mapping_config['url_column']] + '|' + 
+                mapping_data[mapping_config['id_column']]
+            )
 
-            # Créer une copie du DataFrame avec les colonnes sélectionnées
-            mapping_subset = mapping_data[[id_column] + [col for col in selected_columns if col != id_column]]
-            
-            # Renommer la colonne ID pour le mapping
-            mapping_subset = mapping_subset.rename(columns={id_column: 'ID'})
-            
-            # Fusionner avec le DataFrame original
+            # Sélection des colonnes à fusionner
+            columns_to_merge = ['mapping_key'] + mapping_config['selected_columns']
+            mapping_subset = mapping_data[columns_to_merge]
+
+            # Fusion des données
             df = df.merge(
                 mapping_subset,
-                left_on='Form ID',
-                right_on='ID',
+                on='mapping_key',
                 how='left'
             )
-            
-            # Gérer le cas où CRM_CAMPAIGN est dans les colonnes sélectionnées
-            mask = df['CRM Campaign'].isna()
-            if 'CRM_CAMPAIGN' in df.columns:
-                df.loc[mask, 'CRM Campaign'] = df.loc[mask, 'CRM_CAMPAIGN']
-            
-            # Supprimer la colonne ID utilisée pour le mapping
-            df = df.drop(['ID'], axis=1, errors='ignore')
-            
-        if self.template_mapping:
-            df['Template'] = df['Form ID'].apply(self.get_template_name)
+
+            # Nettoyage
+            df = df.drop('mapping_key', axis=1)
 
         return df

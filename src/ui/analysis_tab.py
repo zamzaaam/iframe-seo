@@ -2,111 +2,137 @@ import streamlit as st
 import pandas as pd
 from ..analysis import IframeAnalyzer
 from io import StringIO, BytesIO
+from typing import Dict
+
+def display_mapping_configuration(mapping_data: pd.DataFrame) -> Dict:
+    """Configure le mapping des données importées."""
+    st.subheader("🔗 Mapping Configuration")
+
+    # Affichage de l'aperçu des données
+    with st.expander("📊 Preview imported data", expanded=True):
+        st.dataframe(mapping_data.head(), use_container_width=True)
+
+    # Configuration des colonnes de mapping
+    st.info("Select the columns to use for matching data:")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        url_column = st.selectbox(
+            "URL column in imported file",
+            options=mapping_data.columns.tolist(),
+            help="Column containing the source URLs"
+        )
+    
+    with col2:
+        id_column = st.selectbox(
+            "Form ID column in imported file",
+            options=mapping_data.columns.tolist(),
+            help="Column containing the form identifiers"
+        )
+
+    # Sélection des colonnes additionnelles
+    additional_columns = [
+        col for col in mapping_data.columns 
+        if col not in [url_column, id_column]
+    ]
+    
+    selected_columns = st.multiselect(
+        "Select additional information to include",
+        options=additional_columns,
+        help="Choose which additional columns to include in the analysis"
+    )
+
+    # Validation du mapping
+    if st.button("✅ Validate mapping", type="primary"):
+        # Vérification des données
+        missing_urls = mapping_data[url_column].isna().sum()
+        missing_ids = mapping_data[id_column].isna().sum()
+        
+        if missing_urls > 0 or missing_ids > 0:
+            st.warning(f"""
+                ⚠️ Found missing values:
+                - URLs: {missing_urls} missing
+                - Form IDs: {missing_ids} missing
+            """)
+
+        return {
+            "url_column": url_column,
+            "id_column": id_column,
+            "selected_columns": selected_columns
+        }
+    
+    return None
 
 def display():
+    st.header("📊 Analysis", divider="rainbow")
+
+    # Vérifie si des résultats sont disponibles
     if not st.session_state.extraction_results:
-        st.info("ℹ️ Please extract iframes first in the Extraction tab.")
+        st.info("ℹ️ Please extract data first in the Extraction tab.")
         return
 
-    st.header("🔍 Form Analysis", divider="rainbow")
-    
-    total_forms = len(st.session_state.extraction_results)
-    extraction_time = st.session_state.history[-1]["timestamp"] if st.session_state.history else "Unknown"
-    st.caption(f"Last extraction: {extraction_time} ({total_forms} forms found)")
-
-    # Ajouter un avertissement si l'analyse n'est pas à jour
-    if st.session_state.analyzed_df is not None and st.session_state.history:
-        last_extraction = st.session_state.history[-1]["results"]
-        if last_extraction != st.session_state.extraction_results:
-            st.warning("⚠️ New extraction detected! Please restart the analysis to see the latest results.")
-            if st.button("🔄 Update analysis"):
-                st.session_state.analyzed_df = None
-                st.rerun()
-            return
-
+    # Configuration du mapping
     with st.sidebar:
-        st.subheader("⚙️ Analysis Configuration")
-        use_mapping = st.toggle("Use external mapping file", value=False)
-        
-        mapping_data = None
-        selected_columns = []
-        
-        if use_mapping:
-            mapping_file = st.file_uploader(
-                "Import mapping file (Excel/CSV)",
-                type=['xlsx', 'csv']
-            )
-            
-            if mapping_file:
-                try:
-                    if mapping_file.name.endswith('.csv'):
-                        mapping_data = pd.read_csv(mapping_file)
-                    else:
-                        mapping_data = pd.read_excel(mapping_file)
-                    
-                    st.success(f"✅ File loaded with {len(mapping_data)} rows")
-                    
-                    # Afficher un aperçu du fichier
-                    with st.expander("📊 Preview imported data"):
-                        st.dataframe(mapping_data.head(), use_container_width=True)
-                    
-                    # Sélection de la colonne ID
-                    id_column = st.selectbox(
-                        "Select the column containing Form IDs",
+        st.subheader("🔄 Data Mapping")
+        mapping_file = st.file_uploader(
+            "Import additional data (Excel/CSV)",
+            type=['xlsx', 'csv'],
+            help="Import a file containing additional information to merge with the results"
+        )
+
+        if mapping_file:
+            try:
+                # Chargement du fichier
+                if mapping_file.name.endswith('.csv'):
+                    mapping_data = pd.read_csv(mapping_file)
+                else:
+                    mapping_data = pd.read_excel(mapping_file)
+                
+                st.success(f"✅ File loaded with {len(mapping_data)} rows")
+                
+                # Aperçu des données
+                with st.expander("📊 Preview imported data"):
+                    st.dataframe(mapping_data.head())
+
+                # Configuration des colonnes de mapping
+                mapping_config = {
+                    "url_column": st.selectbox(
+                        "Select URL column",
                         options=mapping_data.columns.tolist(),
-                        index=mapping_data.columns.get_loc('ID') if 'ID' in mapping_data.columns else 0,
-                        help="Choose the column that contains your form identifiers"
+                        help="Column containing the page URLs"
+                    ),
+                    "id_column": st.selectbox(
+                        "Select Form ID column",
+                        options=mapping_data.columns.tolist(),
+                        help="Column containing the form identifiers"
+                    ),
+                    "selected_columns": st.multiselect(
+                        "Select additional columns to include",
+                        options=[col for col in mapping_data.columns],
+                        help="Choose which additional information to include in results"
                     )
-                    
-                    # Sélection des colonnes additionnelles
-                    other_columns = [col for col in mapping_data.columns if col != id_column]
-                    selected_columns = st.multiselect(
-                        "Select additional columns to import",
-                        options=other_columns,
-                        default=['CRM_CAMPAIGN'] if 'CRM_CAMPAIGN' in other_columns else []
-                    )
-                    
-                    st.info(f"📌 Selected {len(selected_columns)} column(s) to import")
-                    
-                except Exception as e:
-                    st.error(f"❌ Error loading file: {str(e)}")
-                    mapping_data = None
+                }
 
-    if st.session_state.analyzed_df is None:
-        st.warning("⚠️ Click 'Start analysis' to begin")
-        col1, _ = st.columns([1, 3])
-        with col1:
-            if st.button("📊 Start analysis", type="primary"):
-                with st.spinner("Analyzing..."):
-                    analyzer = IframeAnalyzer()
-                    analyzed_df = analyzer.analyze_crm_data(
-                        st.session_state.extraction_results,
-                        mapping_data,
-                        selected_columns,
-                        id_column
-                    )
-                    st.session_state.analyzed_df = analyzed_df
-                    st.rerun()
-        return
+                # Analyse avec mapping
+                analyzer = IframeAnalyzer()
+                analyzed_df = analyzer.analyze_crm_data(
+                    st.session_state.extraction_results,
+                    mapping_data,
+                    mapping_config
+                )
+                
+                st.session_state.analyzed_df = analyzed_df
 
-    # Display tabs
-    summary_tab, details_tab, export_tab = st.tabs([
-        "📈 Summary", "🔎 Details", "💾 Export"
-    ])
-
-    with summary_tab:
-        display_summary(st.session_state.analyzed_df)
-
-    with details_tab:
-        display_details(st.session_state.analyzed_df)
-
-    with export_tab:
-        display_export(st.session_state.analyzed_df)
-
-    with st.sidebar:
-        if st.button("🔄 Reset analysis"):
-            st.session_state.analyzed_df = None
-            st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error loading file: {str(e)}")
+                return
+    
+    # Affichage des résultats
+    if st.session_state.analyzed_df is not None:
+        st.dataframe(
+            st.session_state.analyzed_df,
+            use_container_width=True
+        )
 
 def display_summary(df):
     total_forms = len(df)
