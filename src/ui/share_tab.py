@@ -1,8 +1,10 @@
 import streamlit as st
+import pandas as pd  # S'assurer que pandas est importé
 import time
 import logging
 import re
 from ..utils import sanitize_html
+from datetime import datetime  # Ajouter cet import
 
 # Configuration du logger
 logger = logging.getLogger('share_tab')
@@ -42,12 +44,12 @@ def generate_email_body(total_forms, unique_forms, templated, with_crm, without_
 Here are the results of the forms analysis:
 
 SUMMARY:
-• {total_forms} total forms analyzed
-• {unique_forms} unique forms identified
+- {total_forms} total forms analyzed
+- {unique_forms} unique forms identified
   - including {templated} templated forms
   - including {unique_forms - templated} non-templated forms
-• {with_crm} forms with CRM code
-• {without_crm} forms without CRM code"""
+- {with_crm} forms with CRM code
+- {without_crm} forms without CRM code"""
 
         # Ajouter les métriques pour les données de mapping URL
         if url_mapping_columns and len(url_mapping_columns) > 0:
@@ -112,6 +114,15 @@ SUMMARY:
                         body += f"\n• ℹ️ {len(missing_data)} forms without {display_name} information"
                 except Exception as e:
                     logger.error(f"Error checking missing CRM data for {col_name}: {str(e)}")
+
+        # Ajouter une note spécifique sur le fichier Excel multi-feuilles
+        body += "\n\nEXPORT DETAILS:"
+        body += "\nThe attached Excel file contains multiple sheets:"
+        body += "\n• Analysis Results - Contains the complete data with all columns"
+        body += "\n• URL Mapping Data - Original mapping data for reference"
+        body += "\n• CRM Campaign Data - Original CRM campaign information"
+        body += "\n• Template Data - Mapping of form IDs to template names"
+        body += "\n\nThe file is named with a timestamp to ensure uniqueness."
 
         body += "\n\nBest regards"
         
@@ -211,6 +222,10 @@ def display():
         - Shows forms with incorrect integration
         - Shows forms missing CRM tracking
         - Shows any mapping or CRM data with significant missing values
+        
+        **5. EXPORT DETAILS**
+        - Describes the multi-sheet structure of the Excel file
+        - Explains the content of each sheet
         """)
     except Exception as e:
         logger.error(f"Error in share tab display: {str(e)}")

@@ -5,8 +5,10 @@ from io import StringIO, BytesIO
 from typing import Dict, Optional
 import logging
 import re
+import json
+from datetime import datetime
 
-# Initialisation du logger
+# Configuration du logger
 logger = logging.getLogger('analysis_tab')
 
 def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -362,16 +364,58 @@ def display_details(df):
         logger.error(f"Error in display_details: {str(e)}")
 
 def display_export(df):
-    """Affiche les options d'export des résultats"""
+    """Affiche les options d'export des résultats avec multi-feuilles"""
     if df is None or df.empty:
         return
+        
+    # Récupérer les données de mapping depuis la session state
+    url_mapping_data = st.session_state.url_mapping_data if 'url_mapping_data' in st.session_state else None
+    crm_data = st.session_state.crm_data if 'crm_data' in st.session_state else None
         
     st.subheader("💾 Export results")
     
     # Option pour renommer les colonnes CRM dans l'export
     rename_crm_cols = st.checkbox("Remove 'CRM_' prefix in column names for export", value=True)
     
+    # Champ pour personnaliser le nom du fichier
+    custom_filename = st.text_input(
+        "Custom filename prefix (optional)",
+        value="forms_analysis",
+        help="A unique timestamp will be added automatically"
+    )
+    
     export_format = st.radio("Export format", ["CSV", "Excel"])
+    
+    # Options additionnelles pour Excel
+    excel_options = {}
+    if export_format == "Excel":
+        st.subheader("Excel options")
+        excel_options["include_template_data"] = st.checkbox(
+            "Include template mapping data", 
+            value=True,
+            help="Add a sheet with template mapping information"
+        )
+        
+        # Option pour les données de mapping URL (si disponibles)
+        if url_mapping_data is not None:
+            excel_options["include_mapped_data"] = st.checkbox(
+                "Include URL mapping data", 
+                value=True, 
+                help="Add a sheet with URL mapping information"
+            )
+        else:
+            excel_options["include_mapped_data"] = False
+            
+        # Option pour les données CRM (si disponibles)
+        if crm_data is not None:
+            excel_options["include_crm_data"] = st.checkbox(
+                "Include CRM data", 
+                value=True,
+                help="Add a sheet with CRM campaign information"
+            )
+        else:
+            excel_options["include_crm_data"] = False
+    
     col1, _ = st.columns([1, 3])
     
     with col1:
@@ -386,23 +430,58 @@ def display_export(df):
             # Sanitize les données avant export
             export_df = sanitize_dataframe(export_df)
             
+            # Générer un timestamp unique pour le nom du fichier
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{custom_filename}_{timestamp}"
+            
             if export_format == "CSV":
                 output = StringIO()
                 export_df.to_csv(output, index=False)
                 st.download_button(
                     "📥 Download analysis (CSV)",
                     output.getvalue(),
-                    "forms_analysis.csv",
+                    f"{filename}.csv",
                     "text/csv"
                 )
             else:
+                # Export Excel multi-feuilles
                 output = BytesIO()
-                export_df.to_excel(output, engine='openpyxl', index=False)
+                
+                # Créer un writer Excel
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    # Feuille 1: Résultats de l'analyse
+                    export_df.to_excel(writer, sheet_name="Analysis Results", index=False)
+                    
+                    # Feuille 2: Données de mapping URL (si disponibles)
+                    if excel_options.get("include_mapped_data", False) and url_mapping_data is not None:
+                        url_mapping_data.to_excel(writer, sheet_name="URL Mapping Data", index=False)
+                    
+                    # Feuille 3: Données CRM (si disponibles)
+                    if excel_options.get("include_crm_data", False) and crm_data is not None:
+                        crm_data.to_excel(writer, sheet_name="CRM Campaign Data", index=False)
+                    
+                    # Feuille 4: Données des templates Selligent
+                    if excel_options.get("include_template_data", False):
+                        try:
+                            # Charger les données de template depuis le fichier JSON
+                            with open("data/template_mapping.json", "r") as f:
+                                template_data = json.load(f)
+                                
+                            # Convertir en DataFrame
+                            template_df = pd.DataFrame([
+                                {"Form ID": form_id, "Template Name": template_name}
+                                for form_id, template_name in template_data.items()
+                            ])
+                            
+                            template_df.to_excel(writer, sheet_name="Template Data", index=False)
+                        except Exception as e:
+                            st.warning(f"Could not include template data: {str(e)}")
+                
                 output.seek(0)
                 st.download_button(
                     "📥 Download analysis (Excel)",
                     output.getvalue(),
-                    "forms_analysis.xlsx",
+                    f"{filename}.xlsx",
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         except Exception as e:
@@ -412,6 +491,12 @@ def display_export(df):
 def display():
     """Affiche l'onglet analyse."""
     st.header("📊 Analysis", divider="rainbow")
+
+    # Initialiser les variables de session pour les données de mapping
+    if 'url_mapping_data' not in st.session_state:
+        st.session_state.url_mapping_data = None
+    if 'crm_data' not in st.session_state:
+        st.session_state.crm_data = None
 
     # Vérifie si des résultats sont disponibles
     if not st.session_state.extraction_results:
@@ -448,6 +533,9 @@ def display():
                 url_mapping_data = load_data_file(url_mapping_file)
                 
                 if url_mapping_data is not None:
+                    # Sauvegarder dans la session state
+                    st.session_state.url_mapping_data = url_mapping_data
+                    
                     # Aperçu des données - Sans utiliser d'expander
                     st.subheader("📊 Preview imported URL mapping")
                     
@@ -490,6 +578,9 @@ def display():
                 crm_data = load_data_file(crm_file)
                 
                 if crm_data is not None:
+                    # Sauvegarder dans la session state
+                    st.session_state.crm_data = crm_data
+                    
                     # Aperçu des données - Sans utiliser d'expander
                     st.subheader("📊 Preview imported CRM data")
                     

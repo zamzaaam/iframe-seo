@@ -1,9 +1,11 @@
 import streamlit as st
 import pandas as pd
-from io import StringIO
+from io import StringIO, BytesIO
 import time
 import logging
 import re
+import json
+from datetime import datetime
 from ..utils import sanitize_html
 
 # Configuration du logger
@@ -61,6 +63,50 @@ def save_to_history(results, input_urls, parameters, execution_time):
     except Exception as e:
         logger.error(f"Error saving to history: {str(e)}")
 
+def export_with_sheets(results, timestamp):
+    """Crée un export Excel multi-feuilles pour une entrée d'historique."""
+    try:
+        if not results or not isinstance(results, list):
+            st.error("Invalid results format")
+            return None, None
+            
+        # Créer le DataFrame principal
+        export_df = pd.DataFrame(results)
+        
+        # Générer un timestamp unique pour le nom du fichier
+        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"history_export_{current_time}"
+        
+        # Créer le buffer de sortie
+        output = BytesIO()
+        
+        # Créer un writer Excel
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Feuille 1: Résultats de l'extraction
+            export_df.to_excel(writer, sheet_name="Extraction Results", index=False)
+            
+            # Feuille 2: Données des templates Selligent
+            try:
+                # Charger les données de template depuis le fichier JSON
+                with open("data/template_mapping.json", "r") as f:
+                    template_data = json.load(f)
+                    
+                # Convertir en DataFrame
+                template_df = pd.DataFrame([
+                    {"Form ID": form_id, "Template Name": template_name}
+                    for form_id, template_name in template_data.items()
+                ])
+                
+                template_df.to_excel(writer, sheet_name="Template Data", index=False)
+            except Exception as e:
+                logger.error(f"Could not include template data: {str(e)}")
+        
+        output.seek(0)
+        return output, filename
+    except Exception as e:
+        logger.error(f"Error creating multi-sheet export: {str(e)}")
+        return None, None
+
 def display_history_entry(entry, idx):
     """Affiche les détails d'une entrée de l'historique de manière sécurisée."""
     try:
@@ -100,21 +146,45 @@ def display_history_entry(entry, idx):
                 else:
                     st.error("Unable to reload this extraction due to invalid data format")
 
+            # Options d'export
+            st.markdown("#### Export Options")
+            export_format = st.radio(
+                "Export format", 
+                ["CSV", "Excel (multi-sheet)"],
+                key=f"export_format_{idx}"
+            )
+
             # Export option with sanitized data
             if "results" in entry and isinstance(entry["results"], list) and len(entry["results"]) > 0:
                 try:
-                    output = StringIO()
-                    df = pd.DataFrame(entry["results"])
-                    df.to_csv(output, index=False)
-                    st.download_button(
-                        "📥 Download results (CSV)",
-                        output.getvalue(),
-                        f"extraction_results_{entry['timestamp'].replace(' ', '_').replace(':', '-')}.csv",
-                        "text/csv"
-                    )
+                    if export_format == "CSV":
+                        output = StringIO()
+                        df = pd.DataFrame(entry["results"])
+                        df.to_csv(output, index=False)
+                        st.download_button(
+                            "📥 Download results (CSV)",
+                            output.getvalue(),
+                            f"extraction_results_{entry['timestamp'].replace(' ', '_').replace(':', '-')}.csv",
+                            "text/csv",
+                            key=f"download_csv_{idx}"
+                        )
+                    else:  # Excel multi-sheet
+                        output, filename = export_with_sheets(
+                            entry["results"], 
+                            entry["timestamp"]
+                        )
+                        
+                        if output:
+                            st.download_button(
+                                "📥 Download results (Excel)",
+                                output.getvalue(),
+                                f"{filename}.xlsx",
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"download_excel_{idx}"
+                            )
                 except Exception as e:
-                    st.error(f"Error generating CSV: {str(e)}")
-                    logger.error(f"Error in CSV export: {str(e)}")
+                    st.error(f"Error generating export: {str(e)}")
+                    logger.error(f"Error in export: {str(e)}")
     except Exception as e:
         st.error(f"Error displaying history entry: {str(e)}")
         logger.error(f"Error in display_history_entry: {str(e)}")
