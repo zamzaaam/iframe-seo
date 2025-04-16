@@ -15,8 +15,8 @@ def display():
     with_crm = df['CRM Campaign'].notna().sum()
     without_crm = df['CRM Campaign'].isna().sum()
 
-    # Récupérer les colonnes importées
-    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template']]
+    # Récupérer les colonnes importées (excepté Cluster)
+    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster']]
 
     st.subheader("📝 Email template")
     

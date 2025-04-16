@@ -4,65 +4,6 @@ from ..analysis import IframeAnalyzer
 from io import StringIO, BytesIO
 from typing import Dict
 
-def display_mapping_configuration(mapping_data: pd.DataFrame) -> Dict:
-    """Configure le mapping des données importées."""
-    st.subheader("🔗 Mapping Configuration")
-
-    # Affichage de l'aperçu des données
-    with st.expander("📊 Preview imported data", expanded=True):
-        st.dataframe(mapping_data.head(), use_container_width=True)
-
-    # Configuration des colonnes de mapping
-    st.info("Select the columns to use for matching data:")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        url_column = st.selectbox(
-            "URL column in imported file",
-            options=mapping_data.columns.tolist(),
-            help="Column containing the source URLs"
-        )
-    
-    with col2:
-        id_column = st.selectbox(
-            "Form ID column in imported file",
-            options=mapping_data.columns.tolist(),
-            help="Column containing the form identifiers"
-        )
-
-    # Sélection des colonnes additionnelles
-    additional_columns = [
-        col for col in mapping_data.columns 
-        if col not in [url_column, id_column]
-    ]
-    
-    selected_columns = st.multiselect(
-        "Select additional information to include",
-        options=additional_columns,
-        help="Choose which additional columns to include in the analysis"
-    )
-
-    # Validation du mapping
-    if st.button("✅ Validate mapping", type="primary"):
-        # Vérification des données
-        missing_urls = mapping_data[url_column].isna().sum()
-        missing_ids = mapping_data[id_column].isna().sum()
-        
-        if missing_urls > 0 or missing_ids > 0:
-            st.warning(f"""
-                ⚠️ Found missing values:
-                - URLs: {missing_urls} missing
-                - Form IDs: {missing_ids} missing
-            """)
-
-        return {
-            "url_column": url_column,
-            "id_column": id_column,
-            "selected_columns": selected_columns
-        }
-    
-    return None
-
 def display():
     st.header("📊 Analysis", divider="rainbow")
 
@@ -110,7 +51,9 @@ def display():
                     st.dataframe(mapping_data.head())
                     st.caption("Detected columns: " + ", ".join(mapping_data.columns.tolist()))
 
-                # Configuration des colonnes de mapping
+                # Configuration minimale des colonnes de mapping
+                # On ne demande plus à l'utilisateur de sélectionner les colonnes supplémentaires
+                # La détection sera automatique pour CRM Campaign Code et Cluster
                 mapping_config = {
                     "url_column": st.selectbox(
                         "Select URL column",
@@ -122,10 +65,11 @@ def display():
                         options=mapping_data.columns.tolist(),
                         help="Column containing the form identifiers"
                     ),
+                    # On garde cette option mais elle devient facultative
                     "selected_columns": st.multiselect(
-                        "Select additional columns to include",
+                        "Select additional columns to include (optional)",
                         options=[col for col in mapping_data.columns],
-                        help="Choose which additional information to include in results"
+                        help="Choose additional columns to include beyond CRM Campaign Code and Cluster"
                     )
                 }
 
@@ -145,12 +89,19 @@ def display():
     
     # Affichage des résultats
     if st.session_state.analyzed_df is not None:
-        st.dataframe(
-            st.session_state.analyzed_df,
-            use_container_width=True
-        )
+        # Affichage du résumé
+        display_summary(st.session_state.analyzed_df)
+        
+        # Affichage des détails
+        display_details(st.session_state.analyzed_df)
+        
+        # Options d'export
+        display_export(st.session_state.analyzed_df)
 
 def display_summary(df):
+    """Affiche un résumé des résultats"""
+    st.subheader("📊 Summary", divider="blue")
+    
     total_forms = len(df)
     total_unique = df['Form ID'].nunique()
     templated = df[df['Template'].notna()]['Form ID'].nunique() if 'Template' in df.columns else 0
@@ -165,8 +116,8 @@ def display_summary(df):
     with col4:
         st.metric("Without CRM code", df['CRM Campaign'].isna().sum())
 
-    # Afficher les métriques pour les colonnes importées
-    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template']]
+    # Afficher les métriques pour les colonnes importées (excepté Cluster)
+    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster']]
     if imported_columns:
         st.subheader("📊 Imported data metrics")
         metrics_cols = st.columns(min(4, len(imported_columns)))
@@ -185,38 +136,86 @@ def display_summary(df):
 def display_details(df):
     st.subheader("📑 Detailed data")
     
-    # Filtres standard
-    filter_cols = st.columns([1, 1])
-    with filter_cols[0]:
+    st.subheader("🔍 Filters")
+    
+    # Filtres fusionnés dans une interface unifiée
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
         template_filter = st.multiselect(
-            "Filter by template",
+            "Filter by Template",
             options=df['Template'].dropna().unique() if 'Template' in df.columns else []
         )
-    with filter_cols[1]:
-        crm_filter = st.radio(
-            "CRM status",
-            ["All", "With CRM", "Without CRM"]
-        )
     
-    # Filtres pour les colonnes importées
-    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template']]
-    imported_filters = {}
+    with col2:
+        # Filtre pour Cluster s'il existe
+        cluster_filter = []
+        if 'Cluster' in df.columns:
+            unique_clusters = df['Cluster'].dropna().unique()
+            if len(unique_clusters) > 0:
+                cluster_filter = st.multiselect(
+                    "Filter by Cluster",
+                    options=unique_clusters
+                )
     
-    if imported_columns:
-        st.subheader("🔍 Filter by imported data")
-        filter_columns = st.columns(min(3, len(imported_columns)))
+    with col3:
+        # Filtre pour CRM Campaign
+        crm_unique_values = df['CRM Campaign'].dropna().unique()
+        if len(crm_unique_values) > 0 and len(crm_unique_values) <= 15:  # Limiter si trop de valeurs
+            crm_campaign_filter = st.multiselect(
+                "Filter by CRM Campaign",
+                options=crm_unique_values
+            )
+        else:
+            crm_campaign_filter = []
+            crm_filter = st.radio(
+                "CRM status",
+                ["All", "With CRM", "Without CRM"]
+            )
+    
+    # Filtres pour les autres colonnes importées (excluant Cluster qui est déjà filtré)
+    other_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster']]
+    other_filters = {}
+    
+    if other_columns:
+        st.subheader("🔍 Additional filters")
+        filter_columns = st.columns(min(3, len(other_columns)))
         
-        for idx, col_name in enumerate(imported_columns):
+        for idx, col_name in enumerate(other_columns):
             with filter_columns[idx % 3]:
                 # Obtenir les valeurs uniques en excluant les NaN
                 unique_values = df[col_name].dropna().unique()
                 if len(unique_values) > 0 and len(unique_values) <= 10:  # Seulement pour les colonnes avec un nombre raisonnable de valeurs uniques
-                    imported_filters[col_name] = st.multiselect(
+                    other_filters[col_name] = st.multiselect(
                         f"Filter by {col_name}",
                         options=unique_values
                     )
 
-    filtered_df = apply_filters(df, template_filter, crm_filter, imported_filters)
+    # Applique tous les filtres
+    filtered_df = df.copy()
+    
+    # Filtre par Template
+    if template_filter:
+        filtered_df = filtered_df[filtered_df['Template'].isin(template_filter)]
+    
+    # Filtre par Cluster
+    if cluster_filter:
+        filtered_df = filtered_df[filtered_df['Cluster'].isin(cluster_filter)]
+    
+    # Filtre par CRM Campaign
+    if 'crm_campaign_filter' in locals() and crm_campaign_filter:
+        filtered_df = filtered_df[filtered_df['CRM Campaign'].isin(crm_campaign_filter)]
+    elif 'crm_filter' in locals():
+        if crm_filter == "With CRM":
+            filtered_df = filtered_df[filtered_df['CRM Campaign'].notna()]
+        elif crm_filter == "Without CRM":
+            filtered_df = filtered_df[filtered_df['CRM Campaign'].isna()]
+    
+    # Autres filtres
+    for col_name, filter_values in other_filters.items():
+        if filter_values:
+            filtered_df = filtered_df[filtered_df[col_name].isin(filter_values)]
+    
     st.metric("Filtered results", len(filtered_df))
     st.dataframe(
         filtered_df,
@@ -263,7 +262,7 @@ def display_alerts(df):
             "severity": "error",
             "title": "Bad integrations",
             "message": f"{len(bad_integration)} forms with incorrect integration detected",
-            "data": bad_integration[['URL source', 'Form ID', 'CRM Campaign']]
+            "data": bad_integration[['URL source', 'Iframe', 'Form ID']]
         })
 
     if not missing_crm.empty:
@@ -274,8 +273,8 @@ def display_alerts(df):
             "data": missing_crm[['URL source', 'Form ID']]
         })
     
-    # Alertes pour les colonnes importées
-    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template']]
+    # Alertes pour les colonnes importées sauf "Cluster"
+    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster']]
     for col_name in imported_columns:
         missing_data = df[df[col_name].isna()]
         if not missing_data.empty:
@@ -302,23 +301,3 @@ def display_alerts(df):
                 )
     else:
         st.success("✅ No anomalies detected")
-
-def apply_filters(df, template_filter, crm_filter, imported_filters=None):
-    filtered_df = df.copy()
-    
-    # Appliquer les filtres standard
-    if template_filter:
-        filtered_df = filtered_df[filtered_df['Template'].isin(template_filter)]
-    
-    if crm_filter == "With CRM":
-        filtered_df = filtered_df[filtered_df['CRM Campaign'].notna()]
-    elif crm_filter == "Without CRM":
-        filtered_df = filtered_df[filtered_df['CRM Campaign'].isna()]
-    
-    # Appliquer les filtres pour les colonnes importées
-    if imported_filters:
-        for col_name, filter_values in imported_filters.items():
-            if filter_values:  # Si des filtres sont sélectionnés
-                filtered_df = filtered_df[filtered_df[col_name].isin(filter_values)]
-    
-    return filtered_df

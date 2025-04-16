@@ -26,47 +26,89 @@ class IframeAnalyzer:
         """
         Analyse les données CRM et applique le mapping personnalisé
         """
+        # Filtrer les résultats vides
+        results = [r for r in results if r.get('Iframe') and r.get('URL source') and r.get('Form ID')]
+        
+        if not results:
+            return pd.DataFrame(columns=['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template'])
+        
+        # Créer le DataFrame de base
         df = pd.DataFrame(results)
         
-        # Extraction basique des codes CRM de l'URL
-        df['CRM Campaign (URL)'] = df['Iframe'].apply(
+        # Extraction des codes CRM de l'URL
+        df['CRM Campaign'] = df['Iframe'].apply(
             lambda x: extract_id_and_code(x)[1])
+        
+        # Ajout des noms de template
+        if 'Form ID' in df.columns and self.template_mapping:
+            df['Template'] = df['Form ID'].apply(self.get_template_name)
 
-        if mapping_data is not None and mapping_config is not None:
-            # Création d'une clé de mapping unique
-            df['mapping_key'] = df['URL source'] + '|' + df['Form ID']
-            mapping_data['mapping_key'] = (
-                mapping_data[mapping_config['url_column']] + '|' + 
-                mapping_data[mapping_config['id_column']]
-            )
-
-            # Sélection des colonnes à fusionner
-            columns_to_merge = ['mapping_key'] + mapping_config['selected_columns']
-            mapping_subset = mapping_data[columns_to_merge]
-
-            # Fusion des données
-            df = df.merge(
-                mapping_subset,
-                on='mapping_key',
-                how='left'
-            )
-
-            # Supposons que la colonne CRM du mapping s'appelle 'CRM Campaign'
-            if 'CRM Campaign' in mapping_config['selected_columns']:
-                # Créer la colonne finale en priorisant l'URL puis le mapping
-                df['Final CRM Campaign'] = df['CRM Campaign (URL)'].combine_first(df['CRM Campaign'])
-                
-                # Supprimer les colonnes intermédiaires
-                df = df.drop(['CRM Campaign (URL)', 'CRM Campaign'], axis=1)
-                
-                # Renommer la colonne finale
-                df = df.rename(columns={'Final CRM Campaign': 'CRM Campaign'})
-
-            # Nettoyage
-            df = df.drop('mapping_key', axis=1)
-
-        else:
-            # Si pas de mapping, renommer simplement la colonne URL
-            df = df.rename(columns={'CRM Campaign (URL)': 'CRM Campaign'})
-
+        # Si pas de mapping, retourner simplement les données du scraping
+        if mapping_data is None or mapping_config is None:
+            return df
+        
+        # Préparation du mapping
+        mapping_df = mapping_data.copy()
+        url_col = mapping_config['url_column']
+        id_col = mapping_config['id_column']
+        
+        # DÉTECTION AUTOMATIQUE des colonnes importantes
+        crm_column = None
+        cluster_column = None
+        
+        for col in mapping_df.columns:
+            if 'crm' in col.lower() and ('code' in col.lower() or 'campaign' in col.lower()):
+                crm_column = col
+            elif 'cluster' in col.lower():
+                cluster_column = col
+        
+        # Créer des dictionnaires de mapping basés sur l'URL
+        url_mapping = {}
+        if url_col in mapping_df.columns:
+            for col in mapping_df.columns:
+                if col != url_col and col != id_col:
+                    url_mapping[col] = dict(zip(mapping_df[url_col], mapping_df[col]))
+        
+        # Créer des dictionnaires de mapping basés sur l'ID (fallback)
+        id_mapping = {}
+        if id_col in mapping_df.columns:
+            for col in mapping_df.columns:
+                if col != url_col and col != id_col:
+                    id_mapping[col] = dict(zip(mapping_df[id_col], mapping_df[col]))
+        
+        # Appliquer le mapping aux résultats
+        for idx, row in df.iterrows():
+            url = row['URL source']
+            form_id = row['Form ID']
+            
+            # Traitement spécial pour CRM Campaign
+            if crm_column and (pd.isna(row['CRM Campaign']) or row['CRM Campaign'] == "None" or row['CRM Campaign'] == ""):
+                # D'abord essayer par URL
+                if url in url_mapping.get(crm_column, {}):
+                    df.at[idx, 'CRM Campaign'] = url_mapping[crm_column][url]
+                # Sinon par ID
+                elif form_id in id_mapping.get(crm_column, {}):
+                    df.at[idx, 'CRM Campaign'] = id_mapping[crm_column][form_id]
+            
+            # Traitement pour Cluster - UNIQUEMENT par URL
+            if cluster_column:
+                if url in url_mapping.get(cluster_column, {}):
+                    df.at[idx, 'Cluster'] = url_mapping[cluster_column][url]
+        
+        # Si d'autres colonnes sont explicitement sélectionnées, les ajouter aussi
+        if mapping_config and 'selected_columns' in mapping_config:
+            selected_cols = [col for col in mapping_config['selected_columns'] 
+                            if col != crm_column and col != cluster_column]
+            
+            for col in selected_cols:
+                for idx, row in df.iterrows():
+                    url = row['URL source']
+                    form_id = row['Form ID']
+                    
+                    # D'abord essayer par URL puis par ID
+                    if url in url_mapping.get(col, {}):
+                        df.at[idx, col] = url_mapping[col][url]
+                    elif form_id in id_mapping.get(col, {}):
+                        df.at[idx, col] = id_mapping[col][form_id]
+        
         return df
