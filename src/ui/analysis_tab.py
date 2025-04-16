@@ -26,20 +26,51 @@ def display():
 
     with st.sidebar:
         st.subheader("⚙️ Analysis Configuration")
-        use_mapping = st.toggle("Use CRM mapping", value=False)
+        use_mapping = st.toggle("Use external mapping file", value=False)
         
         mapping_data = None
+        selected_columns = []
+        
         if use_mapping:
             mapping_file = st.file_uploader(
-                "CRM mapping file (Excel)",
-                type=['xlsx']
+                "Import mapping file (Excel/CSV)",
+                type=['xlsx', 'csv']
             )
+            
             if mapping_file:
                 try:
-                    mapping_data = pd.read_excel(mapping_file)
-                    st.success(f"✅ {len(mapping_data)} mappings loaded")
+                    if mapping_file.name.endswith('.csv'):
+                        mapping_data = pd.read_csv(mapping_file)
+                    else:
+                        mapping_data = pd.read_excel(mapping_file)
+                    
+                    st.success(f"✅ File loaded with {len(mapping_data)} rows")
+                    
+                    # Afficher un aperçu du fichier
+                    with st.expander("📊 Preview imported data"):
+                        st.dataframe(mapping_data.head(), use_container_width=True)
+                    
+                    # Sélection de la colonne ID
+                    id_column = st.selectbox(
+                        "Select the column containing Form IDs",
+                        options=mapping_data.columns.tolist(),
+                        index=mapping_data.columns.get_loc('ID') if 'ID' in mapping_data.columns else 0,
+                        help="Choose the column that contains your form identifiers"
+                    )
+                    
+                    # Sélection des colonnes additionnelles
+                    other_columns = [col for col in mapping_data.columns if col != id_column]
+                    selected_columns = st.multiselect(
+                        "Select additional columns to import",
+                        options=other_columns,
+                        default=['CRM_CAMPAIGN'] if 'CRM_CAMPAIGN' in other_columns else []
+                    )
+                    
+                    st.info(f"📌 Selected {len(selected_columns)} column(s) to import")
+                    
                 except Exception as e:
-                    st.error("❌ Format error")
+                    st.error(f"❌ Error loading file: {str(e)}")
+                    mapping_data = None
 
     if st.session_state.analyzed_df is None:
         st.warning("⚠️ Click 'Start analysis' to begin")
@@ -50,7 +81,9 @@ def display():
                     analyzer = IframeAnalyzer()
                     analyzed_df = analyzer.analyze_crm_data(
                         st.session_state.extraction_results,
-                        mapping_data
+                        mapping_data,
+                        selected_columns,
+                        id_column
                     )
                     st.session_state.analyzed_df = analyzed_df
                     st.rerun()
@@ -78,7 +111,7 @@ def display():
 def display_summary(df):
     total_forms = len(df)
     total_unique = df['Form ID'].nunique()
-    templated = df[df['Template'].notna()]['Form ID'].nunique() if 'Template' in df else 0
+    templated = df[df['Template'].notna()]['Form ID'].nunique() if 'Template' in df.columns else 0
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -90,24 +123,58 @@ def display_summary(df):
     with col4:
         st.metric("Without CRM code", df['CRM Campaign'].isna().sum())
 
+    # Afficher les métriques pour les colonnes importées
+    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template']]
+    if imported_columns:
+        st.subheader("📊 Imported data metrics")
+        metrics_cols = st.columns(min(4, len(imported_columns)))
+        
+        for idx, col_name in enumerate(imported_columns):
+            with metrics_cols[idx % 4]:
+                filled_values = df[col_name].notna().sum()
+                st.metric(
+                    f"{col_name}",
+                    f"{filled_values}/{total_forms}",
+                    help=f"Number of forms with {col_name} information"
+                )
+
     display_alerts(df)
 
 def display_details(df):
     st.subheader("📑 Detailed data")
     
-    col1, col2 = st.columns(2)
-    with col1:
+    # Filtres standard
+    filter_cols = st.columns([1, 1])
+    with filter_cols[0]:
         template_filter = st.multiselect(
             "Filter by template",
-            options=df['Template'].unique() if 'Template' in df.columns else []
+            options=df['Template'].dropna().unique() if 'Template' in df.columns else []
         )
-    with col2:
+    with filter_cols[1]:
         crm_filter = st.radio(
             "CRM status",
             ["All", "With CRM", "Without CRM"]
         )
+    
+    # Filtres pour les colonnes importées
+    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template']]
+    imported_filters = {}
+    
+    if imported_columns:
+        st.subheader("🔍 Filter by imported data")
+        filter_columns = st.columns(min(3, len(imported_columns)))
+        
+        for idx, col_name in enumerate(imported_columns):
+            with filter_columns[idx % 3]:
+                # Obtenir les valeurs uniques en excluant les NaN
+                unique_values = df[col_name].dropna().unique()
+                if len(unique_values) > 0 and len(unique_values) <= 10:  # Seulement pour les colonnes avec un nombre raisonnable de valeurs uniques
+                    imported_filters[col_name] = st.multiselect(
+                        f"Filter by {col_name}",
+                        options=unique_values
+                    )
 
-    filtered_df = apply_filters(df, template_filter, crm_filter)
+    filtered_df = apply_filters(df, template_filter, crm_filter, imported_filters)
     st.metric("Filtered results", len(filtered_df))
     st.dataframe(
         filtered_df,
@@ -154,7 +221,7 @@ def display_alerts(df):
             "severity": "error",
             "title": "Bad integrations",
             "message": f"{len(bad_integration)} forms with incorrect integration detected",
-            "data": bad_integration[['URL source', 'CRM Campaign']]  # Changed columns
+            "data": bad_integration[['URL source', 'Form ID', 'CRM Campaign']]
         })
 
     if not missing_crm.empty:
@@ -162,16 +229,30 @@ def display_alerts(df):
             "severity": "warning",
             "title": "Missing CRM codes",
             "message": f"{len(missing_crm)} forms without CRM code",
-            "data": missing_crm[['URL source', 'CRM Campaign']]  # Changed columns
+            "data": missing_crm[['URL source', 'Form ID']]
         })
+    
+    # Alertes pour les colonnes importées
+    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template']]
+    for col_name in imported_columns:
+        missing_data = df[df[col_name].isna()]
+        if not missing_data.empty:
+            alerts.append({
+                "severity": "info",
+                "title": f"Missing {col_name}",
+                "message": f"{len(missing_data)} forms without {col_name} information",
+                "data": missing_data[['URL source', 'Form ID']]
+            })
 
     if alerts:
         for alert in alerts:
             with st.expander(f"🔔 {alert['title']}"):
                 if alert['severity'] == "error":
                     st.error(alert['message'])
-                else:
+                elif alert['severity'] == "warning":
                     st.warning(alert['message'])
+                else:
+                    st.info(alert['message'])
                 st.dataframe(
                     alert['data'],
                     use_container_width=True,
@@ -180,12 +261,22 @@ def display_alerts(df):
     else:
         st.success("✅ No anomalies detected")
 
-def apply_filters(df, template_filter, crm_filter):
+def apply_filters(df, template_filter, crm_filter, imported_filters=None):
     filtered_df = df.copy()
+    
+    # Appliquer les filtres standard
     if template_filter:
         filtered_df = filtered_df[filtered_df['Template'].isin(template_filter)]
+    
     if crm_filter == "With CRM":
         filtered_df = filtered_df[filtered_df['CRM Campaign'].notna()]
     elif crm_filter == "Without CRM":
         filtered_df = filtered_df[filtered_df['CRM Campaign'].isna()]
+    
+    # Appliquer les filtres pour les colonnes importées
+    if imported_filters:
+        for col_name, filter_values in imported_filters.items():
+            if filter_values:  # Si des filtres sont sélectionnés
+                filtered_df = filtered_df[filtered_df[col_name].isin(filter_values)]
+    
     return filtered_df

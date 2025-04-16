@@ -15,10 +15,13 @@ def display():
     with_crm = df['CRM Campaign'].notna().sum()
     without_crm = df['CRM Campaign'].isna().sum()
 
+    # Récupérer les colonnes importées
+    imported_columns = [col for col in df.columns if col not in ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template']]
+
     st.subheader("📝 Email template")
     
     subject = f"Forms Analysis Report - {time.strftime('%d/%m/%Y')}"
-    body = generate_email_body(total_forms, unique_forms, templated, with_crm, without_crm, df)
+    body = generate_email_body(total_forms, unique_forms, templated, with_crm, without_crm, df, imported_columns)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -28,7 +31,7 @@ def display():
     with col2:
         display_instructions()
 
-def generate_email_body(total_forms, unique_forms, templated, with_crm, without_crm, df):
+def generate_email_body(total_forms, unique_forms, templated, with_crm, without_crm, df, imported_columns=None):
     body = f"""Hello,
 
 Here are the results of the forms analysis:
@@ -39,16 +42,31 @@ SUMMARY:
   - including {templated} templated forms
   - including {unique_forms - templated} non-templated forms
 • {with_crm} forms with CRM code
-• {without_crm} forms without CRM code
+• {without_crm} forms without CRM code"""
 
-ATTENTION POINTS:"""
+    # Ajouter les métriques pour les données importées
+    if imported_columns and len(imported_columns) > 0:
+        body += "\n\nIMPORTED DATA METRICS:"
+        for col_name in imported_columns:
+            filled_values = df[col_name].notna().sum()
+            body += f"\n• {filled_values}/{total_forms} forms with {col_name} information"
 
+    body += "\n\nATTENTION POINTS:"
+
+    # Points d'attention standard
     bad_integration = df[df['Iframe'].str.contains("survey.dll", na=False)]
     if not bad_integration.empty:
         body += f"\n• ⚠️ {len(bad_integration)} forms with incorrect integration"
     
     if without_crm > 0:
         body += f"\n• ⚠️ {without_crm} forms without CRM tracking"
+    
+    # Points d'attention pour les données importées
+    if imported_columns:
+        for col_name in imported_columns:
+            missing_data = df[df[col_name].isna()]
+            if not missing_data.empty and len(missing_data) > total_forms * 0.1:  # Plus de 10% de données manquantes
+                body += f"\n• ℹ️ {len(missing_data)} forms without {col_name} information"
 
     body += "\n\nBest regards"
     return body
