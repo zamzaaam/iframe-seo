@@ -25,23 +25,15 @@ class IframeAnalyzer:
                         mapping_config: Optional[Dict] = None) -> pd.DataFrame:
         """
         Analyse les données CRM et applique le mapping personnalisé
-        
-        Args:
-            results: Résultats d'extraction d'iframes
-            mapping_data: DataFrame contenant les données de mapping externes
-            mapping_config: Configuration du mapping avec:
-                - url_column: Nom de la colonne contenant les URLs dans mapping_data
-                - id_column: Nom de la colonne contenant les IDs dans mapping_data
-                - selected_columns: Liste des colonnes additionnelles à inclure
         """
         df = pd.DataFrame(results)
         
-        # Extraction basique des codes CRM
-        df['CRM Campaign'] = df['Iframe'].apply(
+        # Extraction basique des codes CRM de l'URL
+        df['CRM Campaign (URL)'] = df['Iframe'].apply(
             lambda x: extract_id_and_code(x)[1])
 
         if mapping_data is not None and mapping_config is not None:
-            # Création d'une clé de mapping unique (URL + Form ID)
+            # Création d'une clé de mapping unique
             df['mapping_key'] = df['URL source'] + '|' + df['Form ID']
             mapping_data['mapping_key'] = (
                 mapping_data[mapping_config['url_column']] + '|' + 
@@ -59,7 +51,22 @@ class IframeAnalyzer:
                 how='left'
             )
 
+            # Supposons que la colonne CRM du mapping s'appelle 'CRM Campaign'
+            if 'CRM Campaign' in mapping_config['selected_columns']:
+                # Créer la colonne finale en priorisant l'URL puis le mapping
+                df['Final CRM Campaign'] = df['CRM Campaign (URL)'].combine_first(df['CRM Campaign'])
+                
+                # Supprimer les colonnes intermédiaires
+                df = df.drop(['CRM Campaign (URL)', 'CRM Campaign'], axis=1)
+                
+                # Renommer la colonne finale
+                df = df.rename(columns={'Final CRM Campaign': 'CRM Campaign'})
+
             # Nettoyage
             df = df.drop('mapping_key', axis=1)
+
+        else:
+            # Si pas de mapping, renommer simplement la colonne URL
+            df = df.rename(columns={'CRM Campaign (URL)': 'CRM Campaign'})
 
         return df
