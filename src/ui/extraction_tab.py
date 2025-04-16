@@ -1,6 +1,7 @@
 import streamlit as st
 from ..config import Config
 from ..extractors import SitemapExtractor, IframeExtractor, SitemapDiscoveryExtractor
+from ..utils import is_valid_url, sanitize_urls, sanitize_html
 import time
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,6 +10,12 @@ def process_urls_batch(urls, progress_bar):
     results = []
     extractor = IframeExtractor()
     completed_urls = 0
+
+    # Validation des URLs avant traitement
+    urls = sanitize_urls(urls)
+    
+    if not urls:
+        return []
 
     with ThreadPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
         future_to_url = {
@@ -42,6 +49,11 @@ def display_sitemap_discovery():
         placeholder="https://example.com",
     )
     
+    # Validation de l'URL
+    if base_url and not is_valid_url(base_url):
+        st.error("⚠️ Invalid URL format. Please enter a valid URL starting with http:// or https://")
+        base_url = None
+    
     col1, _ = st.columns([1, 3])
     with col1:
         discover_button = st.button("🔍 Discover Sitemaps", type="primary")
@@ -53,10 +65,16 @@ def display_sitemap_discovery():
             discovered = discovery_extractor.discover_sitemaps(base_url)
             
             if discovered:
-                st.session_state.discovered_sitemaps = discovered
+                # Valider chaque URL de sitemap avant de les stocker
+                valid_sitemaps = []
+                for sitemap in discovered:
+                    if is_valid_url(sitemap["url"]):
+                        valid_sitemaps.append(sitemap)
+                
+                st.session_state.discovered_sitemaps = valid_sitemaps
                 # Par défaut, tout sélectionner
-                st.session_state.selected_sitemaps = [s["url"] for s in discovered]
-                st.success(f"✅ Found {len(discovered)} sitemaps!")
+                st.session_state.selected_sitemaps = [s["url"] for s in valid_sitemaps]
+                st.success(f"✅ Found {len(valid_sitemaps)} sitemaps!")
             else:
                 st.warning("⚠️ No sitemaps found. Try entering a different URL.")
     
@@ -83,10 +101,13 @@ def display_sitemap_discovery():
             prefix = "   " * sitemap["depth"]
             icon = "📚 " if sitemap["is_index"] else "📄 "
             
+            # Sanitize the URL for display to prevent XSS
+            display_url = sanitize_html(sitemap["url"])
+            
             # Cases à cocher
             is_selected = sitemap["url"] in st.session_state.selected_sitemaps
             if st.checkbox(
-                f"{prefix}{icon} {sitemap['url']}",
+                f"{prefix}{icon} {display_url}",
                 value=is_selected,
                 key=f"sitemap_{i}"
             ):
@@ -101,8 +122,10 @@ def display_sitemap_discovery():
         with col1:
             if st.button("Extract from Selected Sitemaps", type="primary"):
                 if st.session_state.selected_sitemaps:
+                    # Valider à nouveau les URLs avant de les utiliser
+                    valid_urls = sanitize_urls(st.session_state.selected_sitemaps)
                     # On remplit le champ de saisie des sitemaps
-                    st.session_state.sitemap_input = "\n".join(st.session_state.selected_sitemaps)
+                    st.session_state.sitemap_input = "\n".join(valid_urls)
                     # On change le mode d'entrée pour "XML Sitemaps"
                     st.session_state.input_type = "XML Sitemaps"
                     st.rerun()
@@ -155,7 +178,13 @@ def display():
                 height=200
             )
 
-    urls = [url.strip() for url in urls_input.splitlines() if url.strip()]
+    # Extraction et validation des URLs
+    raw_urls = [url.strip() for url in urls_input.splitlines() if url.strip()]
+    urls = sanitize_urls(raw_urls)
+    
+    # Avertissement si des URLs ont été filtrées
+    if len(urls) < len(raw_urls):
+        st.warning(f"⚠️ {len(raw_urls) - len(urls)} invalid URLs have been filtered out. Please check your input.")
 
     col1, _ = st.columns([1, 3])
     with col1:
@@ -163,7 +192,7 @@ def display():
 
     if start_extraction:
         if not urls:
-            st.warning("⚠️ Please enter at least one URL.")
+            st.warning("⚠️ Please enter at least one valid URL.")
             return
 
         with st.spinner("🔄 Processing..."):
@@ -177,15 +206,17 @@ def display():
 
                 sitemap_extractor = SitemapExtractor()
                 for idx, sitemap_url in enumerate(urls):
-                    status_sitemap.write(f"📑 Reading sitemap: {sitemap_url}")
+                    status_sitemap.write(f"📑 Reading sitemap: {sanitize_html(sitemap_url)}")
                     sitemap_urls = sitemap_extractor.extract_urls(sitemap_url)
+                    # Valider les URLs extraites du sitemap
+                    sitemap_urls = sanitize_urls(sitemap_urls)
                     processed_urls.extend(sitemap_urls)
                     progress_sitemap.progress((idx + 1) / len(urls))
 
                 if processed_urls:
                     st.success(f"✅ {len(processed_urls)} URLs extracted from sitemaps")
                 else:
-                    st.error("❌ No URLs found in sitemaps")
+                    st.error("❌ No valid URLs found in sitemaps")
                     return
             else:
                 processed_urls = urls
