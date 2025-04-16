@@ -82,17 +82,33 @@ def display():
 
         if mapping_file:
             try:
-                # Chargement du fichier
+                # Chargement du fichier avec détection du séparateur
                 if mapping_file.name.endswith('.csv'):
-                    mapping_data = pd.read_csv(mapping_file)
+                    # Essayer d'abord avec le séparateur point-virgule
+                    try:
+                        mapping_data = pd.read_csv(mapping_file, sep=';')
+                    except:
+                        # Si ça échoue, essayer avec la virgule
+                        mapping_file.seek(0)  # Remettre le curseur au début du fichier
+                        mapping_data = pd.read_csv(mapping_file, sep=',')
                 else:
                     mapping_data = pd.read_excel(mapping_file)
                 
-                st.success(f"✅ File loaded with {len(mapping_data)} rows")
+                # Vérifier que le DataFrame n'est pas vide
+                if mapping_data.empty:
+                    st.error("❌ The imported file appears to be empty")
+                    return
+                    
+                if len(mapping_data.columns) <= 1:
+                    st.error("❌ File format error: Could not properly detect columns. Please check the file separator")
+                    return
+                    
+                st.success(f"✅ File loaded with {len(mapping_data)} rows and {len(mapping_data.columns)} columns")
                 
                 # Aperçu des données
-                with st.expander("📊 Preview imported data"):
+                with st.expander("📊 Preview imported data", expanded=True):
                     st.dataframe(mapping_data.head())
+                    st.caption("Detected columns: " + ", ".join(mapping_data.columns.tolist()))
 
                 # Configuration des colonnes de mapping
                 mapping_config = {
