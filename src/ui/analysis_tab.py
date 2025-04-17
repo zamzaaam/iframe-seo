@@ -1,12 +1,15 @@
 import streamlit as st
 import pandas as pd
 from ..analysis import IframeAnalyzer
+from ..extractors import IframeExtractor
 from io import StringIO, BytesIO
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import logging
 import re
 import json
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from ..config import Config
 
 # Initialisation du logger
 logger = logging.getLogger('analysis_tab')
@@ -139,6 +142,218 @@ def find_missing_forms(extraction_results, url_mapping_data, url_column, id_colu
         logger.error(f"Error finding missing forms: {str(e)}")
         return None
 
+def process_missing_url(url, extractor):
+    """
+    Traite une URL manquante pour détecter les formulaires.
+    Retourne les résultats ou None si aucun formulaire n'est trouvé.
+    """
+    try:
+        results = extractor.extract_from_url(url)
+        if results:
+            # Ajouter un statut spécial pour ces résultats
+            for result in results:
+                result['Recovery Status'] = 'Recovered'
+            return results
+        return None
+    except Exception as e:
+        logger.error(f"Error processing missing URL {url}: {str(e)}")
+        return None
+
+def check_missing_urls(missing_urls: List[str], progress_bar=None) -> List[Dict]:
+    """
+    Vérifie les URLs manquantes pour détecter d'éventuels formulaires.
+    
+    Args:
+        missing_urls: Liste des URLs à vérifier
+        progress_bar: Barre de progression Streamlit (optionnel)
+        
+    Returns:
+        List des résultats d'extraction pour les formulaires trouvés
+    """
+    if not missing_urls:
+        return []
+        
+    results = []
+    extractor = IframeExtractor()
+    completed_urls = 0
+    
+    # Vérifier l'état d'arrêt avant de commencer
+    if st.session_state.abort_extraction:
+        if progress_bar:
+            progress_bar.progress(1.0)
+        st.warning("⚠️ Check missing URLs aborted by user!")
+        return results
+    
+    with ThreadPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
+        future_to_url = {
+            executor.submit(process_missing_url, url, extractor): url
+            for url in missing_urls
+        }
+        
+        for future in as_completed(future_to_url):
+            # Vérifier si le processus doit être interrompu
+            if st.session_state.abort_extraction:
+                # Annuler les futures en attente
+                for f in future_to_url:
+                    if not f.done():
+                        f.cancel()
+                if progress_bar:
+                    progress_bar.progress(1.0)
+                st.warning("⚠️ Check missing URLs aborted by user!")
+                break
+            
+            url_results = future.result()
+            if url_results:
+                results.extend(url_results)
+            completed_urls += 1
+            if progress_bar:
+                progress_bar.progress(completed_urls / len(missing_urls))
+    
+    return results
+
+def display_missing_forms(allow_check=True):
+    """Affiche les formulaires présents dans le mapping mais absents dans l'extraction"""
+    if 'missing_forms' not in st.session_state or st.session_state.missing_forms is None:
+        return
+    
+    missing_forms = st.session_state.missing_forms
+    if missing_forms.empty:
+        return
+        
+    st.subheader("📋 Missing Forms", divider="orange")
+    
+    # Afficher le compteur des formulaires réellement manquants vs les formulaires récupérés
+    if 'recovered_forms' in st.session_state and st.session_state.recovered_forms:
+        recovered_count = len(st.session_state.recovered_forms)
+        real_missing_count = len(missing_forms) - recovered_count
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Recovered forms", recovered_count, 
+                     delta=f"+{recovered_count}", 
+                     delta_color="normal",
+                     help="Forms that were initially missing but found after checking")
+        with col2:
+            st.metric("Still missing forms", real_missing_count,
+                     delta=f"-{recovered_count}" if recovered_count > 0 else None,
+                     delta_color="normal",
+                     help="Forms that are still missing after checking")
+    else:
+        st.warning(f"⚠️ {len(missing_forms)} forms found in URL mapping but missing in extraction results")
+    
+    # Bouton pour vérifier les formulaires manquants
+    if allow_check and 'missing_forms' in st.session_state and not missing_forms.empty:
+        col1, _ = st.columns([1, 3])
+        with col1:
+            check_missing = st.button("🔍 Check missing URLs", 
+                                     help="Check if forms exist on these URLs but were missed during extraction",
+                                     type="primary")
+            
+            if check_missing:
+                # Réinitialiser l'état d'arrêt avant de commencer
+                st.session_state.abort_extraction = False
+                
+                # Récupérer les URLs manquantes
+                url_column = None
+                if 'url_mapping_config' in st.session_state and st.session_state.url_mapping_config:
+                    url_column = st.session_state.url_mapping_config.get('url_column')
+                
+                if not url_column or url_column not in missing_forms.columns:
+                    st.error("❌ URL column not found in missing forms data")
+                    return
+                
+                missing_urls = missing_forms[url_column].dropna().tolist()
+                
+                if not missing_urls:
+                    st.warning("No valid URLs to check")
+                    return
+                
+                col1, col2 = st.columns([1, 1])
+                with col2:
+                    # Ajouter un bouton d'arrêt spécifique pour cette vérification
+                    if st.button("🛑 STOP CHECKING", type="secondary", key="stop_missing_check",
+                                help="Immediately stops checking missing URLs",
+                                use_container_width=True):
+                        st.session_state.abort_extraction = True
+                        st.warning("⚠️ Abort requested. Please wait for current operations to finish...")
+                        st.rerun()
+                
+                with st.spinner(f"🔍 Checking {len(missing_urls)} missing URLs..."):
+                    progress = st.progress(0)
+                    
+                    # Vérifier les URLs manquantes
+                    recovered_results = check_missing_urls(missing_urls, progress)
+                    
+                    if st.session_state.abort_extraction:
+                        if recovered_results:
+                            st.warning(f"⚠️ Check was aborted. Only {len(recovered_results)} forms were recovered before abort.")
+                        else:
+                            st.error("❌ Check was aborted. No forms were recovered.")
+                        # Réinitialiser l'état d'arrêt
+                        st.session_state.abort_extraction = False
+                    elif recovered_results:
+                        st.success(f"✅ Found {len(recovered_results)} forms on supposedly missing URLs!")
+                        
+                        # Stocker les résultats récupérés
+                        st.session_state.recovered_forms = recovered_results
+                        
+                        # Mettre à jour les résultats d'extraction
+                        if 'extraction_results' in st.session_state and st.session_state.extraction_results:
+                            # Ajouter les nouveaux résultats aux résultats existants
+                            all_results = st.session_state.extraction_results + recovered_results
+                            st.session_state.extraction_results = all_results
+                            
+                            # Mettre à jour l'analyse
+                            if ('url_mapping_data' in st.session_state and 
+                                'url_mapping_config' in st.session_state and 
+                                'crm_data' in st.session_state and 
+                                'crm_mapping_config' in st.session_state):
+                                
+                                analyzer = IframeAnalyzer()
+                                analyzed_df = analyzer.analyze_crm_data(
+                                    all_results,
+                                    st.session_state.url_mapping_data,
+                                    st.session_state.url_mapping_config,
+                                    st.session_state.crm_data,
+                                    st.session_state.crm_mapping_config
+                                )
+                                
+                                # Mettre à jour le DataFrame analysé
+                                st.session_state.analyzed_df = sanitize_dataframe(analyzed_df)
+                                
+                                # Mettre à jour la liste des formulaires manquants
+                                updated_missing = find_missing_forms(
+                                    all_results,
+                                    st.session_state.url_mapping_data,
+                                    st.session_state.url_mapping_config["url_column"],
+                                    st.session_state.url_mapping_config["id_column"]
+                                )
+                                st.session_state.missing_forms = updated_missing
+                                
+                                st.success("✅ Analysis updated with recovered forms!")
+                                st.rerun()
+                    else:
+                        st.info("ℹ️ No additional forms found on the missing URLs.")
+    
+    # Afficher un tableau des formulaires manquants
+    st.dataframe(
+        missing_forms,
+        use_container_width=True
+    )
+    
+    # Option pour télécharger seulement les formulaires manquants
+    col1, _ = st.columns([1, 3])
+    with col1:
+        # Export des formulaires manquants
+        output = BytesIO()
+        missing_forms.to_csv(output, index=False)
+        st.download_button(
+            "📥 Download missing forms (CSV)",
+            output.getvalue(),
+            "missing_forms.csv",
+            "text/csv"
+        )
+
 def display_summary(df):
     """Affiche un résumé des résultats"""
     st.subheader("📊 Summary", divider="blue")
@@ -159,6 +374,11 @@ def display_summary(df):
     total_unique = df['Form ID'].nunique()
     templated = df[df['Template'].notna()]['Form ID'].nunique() if 'Template' in df.columns else 0
     
+    # Compter les formulaires récupérés - CORRECTION ici
+    recovered_forms = 0
+    if 'Recovery Status' in df.columns:
+        recovered_forms = df[df['Recovery Status'] == 'Recovered'].shape[0]
+    
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total forms", total_forms)
@@ -168,9 +388,13 @@ def display_summary(df):
         st.metric("With CRM code", df['CRM Campaign'].notna().sum())
     with col4:
         st.metric("Without CRM code", df['CRM Campaign'].isna().sum())
+    
+    # Afficher le compteur des formulaires récupérés si présents
+    if recovered_forms > 0:
+        st.success(f"✅ {recovered_forms} forms were recovered from initially missing URLs")
 
     # Afficher les métriques pour les colonnes importées (excepté Cluster)
-    core_columns = ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster']
+    core_columns = ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster', 'Recovery Status']
     url_columns = [col for col in df.columns if col not in core_columns and not col.startswith('CRM_')]
     crm_columns = [col for col in df.columns if col.startswith('CRM_')]
     
@@ -261,37 +485,6 @@ def display_alerts(df):
     else:
         st.success("✅ No anomalies detected")
 
-def display_missing_forms():
-    """Affiche les formulaires présents dans le mapping mais absents dans l'extraction"""
-    if 'missing_forms' not in st.session_state or st.session_state.missing_forms is None:
-        return
-    
-    missing_forms = st.session_state.missing_forms
-    if missing_forms.empty:
-        return
-        
-    st.subheader("📋 Missing Forms", divider="orange")
-    st.warning(f"⚠️ {len(missing_forms)} forms found in URL mapping but missing in extraction results")
-    
-    # Afficher un tableau des formulaires manquants
-    st.dataframe(
-        missing_forms,
-        use_container_width=True
-    )
-    
-    # Option pour télécharger seulement les formulaires manquants
-    col1, _ = st.columns([1, 3])
-    with col1:
-        # Export des formulaires manquants
-        output = BytesIO()
-        missing_forms.to_csv(output, index=False)
-        st.download_button(
-            "📥 Download missing forms (CSV)",
-            output.getvalue(),
-            "missing_forms.csv",
-            "text/csv"
-        )
-
 def display_details(df):
     """Affiche les détails des données"""
     if df is None or df.empty:
@@ -339,8 +532,19 @@ def display_details(df):
                     ["All", "With CRM", "Without CRM"]
                 )
     
+    # Option pour filtrer les formulaires récupérés (s'il y en a)
+    has_recovered = 'Recovery Status' in df.columns and (df['Recovery Status'] == 'Recovered').any()
+    if has_recovered:
+        recovery_filter = st.radio(
+            "Recovery status",
+            ["All", "Only recovered forms", "Only original forms"],
+            horizontal=True
+        )
+    else:
+        recovery_filter = "All"
+    
     # Filtres pour les colonnes importées via URL mapping
-    core_columns = ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster']
+    core_columns = ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster', 'Recovery Status']
     url_columns = [col for col in df.columns if col not in core_columns and not col.startswith('CRM_')]
     
     url_filters = {}
@@ -397,6 +601,13 @@ def display_details(df):
             elif crm_filter == "Without CRM":
                 filtered_df = filtered_df[filtered_df['CRM Campaign'].isna()]
         
+        # Filtre par statut de récupération
+        if recovery_filter != "All" and 'Recovery Status' in filtered_df.columns:
+            if recovery_filter == "Only recovered forms":
+                filtered_df = filtered_df[filtered_df['Recovery Status'] == 'Recovered']
+            elif recovery_filter == "Only original forms":
+                filtered_df = filtered_df[filtered_df['Recovery Status'].isna()]
+        
         # Filtres URL mapping
         for col_name, filter_values in url_filters.items():
             if filter_values:
@@ -421,7 +632,14 @@ def display_details(df):
         st.dataframe(
             display_df,
             use_container_width=True,
-            column_config={"URL source": st.column_config.LinkColumn()}
+            column_config={
+                "URL source": st.column_config.LinkColumn(),
+                "Recovery Status": st.column_config.Column(
+                    "Recovery Status",
+                    help="Indicates if the form was found during the missing URLs check",
+                    width="medium"
+                )
+            }
         )
     except Exception as e:
         st.error(f"Error filtering data: {str(e)}")
@@ -449,7 +667,7 @@ def display_export(df):
         help="A unique timestamp will be added automatically"
     )
     
-    export_format = st.radio("Export format", ["CSV", "Excel"])
+    export_format = st.radio("Export format", ["CSV", "Excel (multi-sheet)"])
     
     # Options additionnelles pour Excel
     excel_options = {}
@@ -490,6 +708,16 @@ def display_export(df):
             )
         else:
             excel_options["include_missing_forms"] = False
+        
+        # Option pour inclure un résumé des formulaires récupérés
+        if 'recovered_forms' in st.session_state and st.session_state.recovered_forms:
+            excel_options["include_recovered_summary"] = st.checkbox(
+                "Include recovered forms summary", 
+                value=True,
+                help="Add a sheet summarizing forms that were recovered from missing URLs"
+            )
+        else:
+            excel_options["include_recovered_summary"] = False
     
     col1, _ = st.columns([1, 3])
     
@@ -555,6 +783,12 @@ def display_export(df):
                             template_df.to_excel(writer, sheet_name="Template Data", index=False)
                         except Exception as e:
                             st.warning(f"Could not include template data: {str(e)}")
+                    
+                    # Feuille 6: Résumé des formulaires récupérés (si disponibles et activés)
+                    if excel_options.get("include_recovered_summary", False) and 'recovered_forms' in st.session_state and st.session_state.recovered_forms:
+                        # Créer un DataFrame à partir des formulaires récupérés
+                        recovered_df = pd.DataFrame(st.session_state.recovered_forms)
+                        recovered_df.to_excel(writer, sheet_name="Recovered Forms", index=False)
                 
                 output.seek(0)
                 st.download_button(
@@ -574,10 +808,16 @@ def display():
     # Initialiser les variables de session pour les données de mapping
     if 'url_mapping_data' not in st.session_state:
         st.session_state.url_mapping_data = None
+    if 'url_mapping_config' not in st.session_state:
+        st.session_state.url_mapping_config = None
     if 'crm_data' not in st.session_state:
         st.session_state.crm_data = None
+    if 'crm_mapping_config' not in st.session_state:
+        st.session_state.crm_mapping_config = None
     if 'missing_forms' not in st.session_state:
         st.session_state.missing_forms = None
+    if 'recovered_forms' not in st.session_state:
+        st.session_state.recovered_forms = None
 
     # Vérifie si des résultats sont disponibles
     if not st.session_state.extraction_results:
@@ -644,6 +884,9 @@ def display():
                             help="Choose additional columns to include in the analysis"
                         )
                     }
+                    
+                    # Enregistrer la configuration dans la session state pour une utilisation ultérieure
+                    st.session_state.url_mapping_config = url_mapping_config
         
         # Section pour l'import des données CRM
         if data_source in ["CRM Data", "Both"]:
@@ -684,6 +927,9 @@ def display():
                             help="Choose which CRM data columns to include in the analysis"
                         )
                     }
+                    
+                    # Enregistrer la configuration dans la session state pour une utilisation ultérieure
+                    st.session_state.crm_mapping_config = crm_mapping_config
         
         # Bouton pour lancer l'analyse
         if (url_mapping_data is not None or crm_data is not None):

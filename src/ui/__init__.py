@@ -11,6 +11,8 @@ def initialize_session_state():
         st.session_state.analyzed_df = None
     if 'history' not in st.session_state:
         st.session_state.history = []
+    if 'abort_extraction' not in st.session_state:
+        st.session_state.abort_extraction = False
 
 def get_app_configuration() -> Dict[str, Any]:
     """Get application configuration from sidebar."""

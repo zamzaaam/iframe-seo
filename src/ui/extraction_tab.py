@@ -17,6 +17,12 @@ def process_urls_batch(urls, progress_bar):
     if not urls:
         return []
 
+    # Vérifier l'état d'arrêt avant de commencer le traitement
+    if st.session_state.abort_extraction:
+        progress_bar.progress(1.0)  # Compléter la barre de progression
+        st.warning("⚠️ Extraction aborted by user!")
+        return []
+
     with ThreadPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
         future_to_url = {
             executor.submit(extractor.extract_from_url, url): url
@@ -24,6 +30,15 @@ def process_urls_batch(urls, progress_bar):
         }
 
         for future in as_completed(future_to_url):
+            # Vérifier si l'extraction doit être interrompue
+            if st.session_state.abort_extraction:
+                # Annuler les futures en attente
+                for f in future_to_url:
+                    if not f.done():
+                        f.cancel()
+                st.warning("⚠️ Extraction aborted by user!")
+                break
+            
             url_results = future.result()
             if url_results:
                 results.extend(url_results)
@@ -54,15 +69,33 @@ def display_sitemap_discovery():
         st.error("⚠️ Invalid URL format. Please enter a valid URL starting with http:// or https://")
         base_url = None
     
-    col1, _ = st.columns([1, 3])
+    col1, col2 = st.columns([1, 1])
     with col1:
         discover_button = st.button("🔍 Discover Sitemaps", type="primary")
     
+    # Ajout du bouton d'arrêt dans la section de découverte de sitemap
+    with col2:
+        if st.button("🛑 STOP DISCOVERY", 
+                   type="secondary", 
+                   help="Immediately stops the sitemap discovery",
+                   use_container_width=True):
+            st.session_state.abort_extraction = True
+            st.warning("⚠️ Discovery abort requested. Please wait for current operations to finish...")
+            st.rerun()
+    
     if discover_button and base_url:
+        # Réinitialiser l'état d'arrêt avant de commencer
+        st.session_state.abort_extraction = False
+        
         with st.spinner("🔄 Discovering sitemaps..."):
             # Effectuer la découverte
             discovery_extractor = SitemapDiscoveryExtractor()
             discovered = discovery_extractor.discover_sitemaps(base_url)
+            
+            # Vérifier si la découverte a été interrompue
+            if st.session_state.abort_extraction:
+                st.warning("⚠️ Sitemap discovery aborted by user!")
+                return
             
             if discovered:
                 # Valider chaque URL de sitemap avant de les stocker
@@ -136,6 +169,10 @@ def display():
     """Affiche l'onglet extraction."""
     initialize_sitemap_discovery()
     
+    # Si un arrêt a été demandé, afficher un message
+    if st.session_state.abort_extraction:
+        st.error("⚠️ Extraction was aborted by user. You can start a new extraction below.")
+    
     st.markdown("""
     This application extracts iframes from the path `//body/div/div/main/` 
     that start with `https://ovh.slgnt.eu/optiext/`.
@@ -186,11 +223,24 @@ def display():
     if len(urls) < len(raw_urls):
         st.warning(f"⚠️ {len(raw_urls) - len(urls)} invalid URLs have been filtered out. Please check your input.")
 
-    col1, _ = st.columns([1, 3])
+    col1, col2 = st.columns([1, 1])
     with col1:
         start_extraction = st.button("Extract iframes", type="primary")
+    
+    # Ajout du bouton d'arrêt dans l'onglet d'extraction
+    with col2:
+        if st.button("🛑 STOP EXTRACTION", 
+                   type="secondary", 
+                   help="Immediately stops the current extraction",
+                   use_container_width=True):
+            st.session_state.abort_extraction = True
+            st.warning("⚠️ Extraction abort requested. Please wait for current operations to finish...")
+            st.rerun()
 
     if start_extraction:
+        # Réinitialiser l'état d'arrêt avant de commencer
+        st.session_state.abort_extraction = False
+        
         if not urls:
             st.warning("⚠️ Please enter at least one valid URL.")
             return
@@ -206,6 +256,12 @@ def display():
 
                 sitemap_extractor = SitemapExtractor()
                 for idx, sitemap_url in enumerate(urls):
+                    # Vérifier si l'extraction doit être interrompue
+                    if st.session_state.abort_extraction:
+                        progress_sitemap.progress(1.0)
+                        st.warning("⚠️ Sitemap extraction aborted by user!")
+                        return
+                    
                     status_sitemap.write(f"📑 Reading sitemap: {sanitize_html(sitemap_url)}")
                     sitemap_urls = sitemap_extractor.extract_urls(sitemap_url)
                     # Valider les URLs extraites du sitemap
@@ -213,7 +269,7 @@ def display():
                     processed_urls.extend(sitemap_urls)
                     progress_sitemap.progress((idx + 1) / len(urls))
 
-                if processed_urls:
+                if processed_urls and not st.session_state.abort_extraction:
                     st.success(f"✅ {len(processed_urls)} URLs extracted from sitemaps")
                 else:
                     st.error("❌ No valid URLs found in sitemaps")
@@ -225,18 +281,24 @@ def display():
                 st.info(f"🧪 Test mode enabled: randomly selecting {Config.TEST_SIZE} URLs")
                 processed_urls = random.sample(processed_urls, Config.TEST_SIZE)
 
-            if processed_urls:
+            if processed_urls and not st.session_state.abort_extraction:
                 status = st.empty()
                 progress = st.progress(0)
                 status.write(f"🔍 Analyzing {len(processed_urls)} URLs...")
 
                 for i in range(0, len(processed_urls), Config.CHUNK_SIZE):
+                    # Vérifier si l'extraction doit être interrompue
+                    if st.session_state.abort_extraction:
+                        progress.progress(1.0)
+                        st.warning("⚠️ URL batch processing aborted by user!")
+                        break
+                    
                     chunk = processed_urls[i:i + Config.CHUNK_SIZE]
                     status.write(f"🔍 Processing batch {i//Config.CHUNK_SIZE + 1}/{len(processed_urls)//Config.CHUNK_SIZE + 1}")
                     chunk_results = process_urls_batch(chunk, progress)
                     results.extend(chunk_results)
 
-                if results:
+                if results and not st.session_state.abort_extraction:
                     execution_time = time.time() - start_time
                     # Réinitialiser l'analyse précédente
                     st.session_state.analyzed_df = None
@@ -260,5 +322,29 @@ def display():
                     """)
                     
                     st.info("💡 Go to the **Analysis** tab for a complete analysis!")
+                elif st.session_state.abort_extraction:
+                    # Si l'extraction a été interrompue
+                    execution_time = time.time() - start_time
+                    if results:
+                        # Sauvegarder quand même les résultats partiels si il y en a
+                        st.session_state.extraction_results = results
+                        parameters = {
+                            "test_mode": Config.TEST_MODE,
+                            "test_urls": Config.TEST_SIZE if Config.TEST_MODE else None,
+                            "workers": Config.MAX_WORKERS,
+                            "timeout": Config.TIMEOUT,
+                            "chunk_size": Config.CHUNK_SIZE,
+                            "aborted": True
+                        }
+                        from .history_tab import save_to_history
+                        save_to_history(results, urls, parameters, execution_time)
+                        
+                        st.warning(f"""
+                        ⚠️ Extraction was aborted after {execution_time:.2f} seconds.
+                        - Only {len(results)} iframes were found before abort.
+                        - Partial results are still available for analysis.
+                        """)
+                    else:
+                        st.error("❌ Extraction was aborted. No iframes were found.")
                 else:
                     st.info("ℹ️ No iframes found.")

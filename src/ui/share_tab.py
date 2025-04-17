@@ -44,6 +44,14 @@ def generate_email_body(total_forms, unique_forms, templated, with_crm, without_
         if 'missing_forms' in st.session_state and st.session_state.missing_forms is not None:
             missing_forms_count = len(st.session_state.missing_forms)
         
+        # Récupérer le nombre de formulaires récupérés
+        recovered_forms_count = 0
+        if 'recovered_forms' in st.session_state and st.session_state.recovered_forms:
+            recovered_forms_count = len(st.session_state.recovered_forms)
+        
+        # Calculer le nombre de formulaires réellement manquants
+        real_missing_count = missing_forms_count - recovered_forms_count
+        
         body = f"""Hello,
 
 Here are the results of the forms analysis:
@@ -56,9 +64,16 @@ SUMMARY:
 • {with_crm} forms with CRM code
 • {without_crm} forms without CRM code"""
 
+        # Ajouter le nombre de formulaires récupérés s'il y en a
+        if recovered_forms_count > 0:
+            body += f"\n• {recovered_forms_count} forms were recovered from missing URLs"
+        
         # Ajouter le nombre de formulaires manquants s'il y en a
         if missing_forms_count > 0:
-            body += f"\n• {missing_forms_count} forms found in URL mapping but missing in extraction"
+            if recovered_forms_count > 0:
+                body += f"\n• {real_missing_count} forms still missing after recovery attempts"
+            else:
+                body += f"\n• {missing_forms_count} forms found in URL mapping but missing in extraction"
 
         # Ajouter les métriques pour les données de mapping URL
         if url_mapping_columns and len(url_mapping_columns) > 0:
@@ -98,8 +113,13 @@ SUMMARY:
         if without_crm > 0:
             body += f"\n• ⚠️ {without_crm} forms without CRM tracking"
         
-        # Point d'attention pour les formulaires manquants
-        if missing_forms_count > 0:
+        # Point d'attention pour les formulaires manquants et récupérés
+        if recovered_forms_count > 0:
+            body += f"\n• ✅ {recovered_forms_count} forms were recovered from initially missing URLs"
+            
+        if real_missing_count > 0:
+            body += f"\n• ⚠️ {real_missing_count} forms are still missing after recovery attempts"
+        elif missing_forms_count > 0 and recovered_forms_count == 0:
             body += f"\n• ⚠️ {missing_forms_count} forms are missing from the extraction results"
         
         # Points d'attention pour les données de mapping URL
@@ -134,6 +154,8 @@ SUMMARY:
         body += "\n• Analysis Results - Contains the complete data with all columns"
         if missing_forms_count > 0:
             body += "\n• Missing Forms - List of forms found in URL mapping but missing in extraction"
+        if recovered_forms_count > 0:
+            body += "\n• Recovered Forms - Forms that were initially missing but found after checking"
         body += "\n• URL Mapping Data - Original mapping data for reference"
         body += "\n• CRM Campaign Data - Original CRM campaign information"
         body += "\n• Template Data - Mapping of form IDs to template names"
@@ -176,15 +198,31 @@ def display():
             templated = df['Template'].notna().sum() if 'Template' in df.columns else 0
             with_crm = df['CRM Campaign'].notna().sum()
             without_crm = df['CRM Campaign'].isna().sum()
+            
+            # Compter les formulaires récupérés - CORRECTION ici
+            recovered_forms = 0
+            if 'Recovery Status' in df.columns:
+                recovered_forms = df[df['Recovery Status'] == 'Recovered'].shape[0]
         except Exception as e:
             logger.error(f"Error calculating metrics: {str(e)}")
             st.error("Error calculating metrics from analysis data.")
             return
 
         # Identifier les différents types de colonnes
-        core_columns = ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster']
+        core_columns = ['URL source', 'Iframe', 'Form ID', 'CRM Campaign', 'Template', 'Cluster', 'Recovery Status']
         url_mapping_columns = [col for col in df.columns if col not in core_columns and not col.startswith('CRM_')]
         crm_data_columns = [col for col in df.columns if col.startswith('CRM_')]
+
+        # Afficher un résumé des données clés 
+        if recovered_forms > 0:
+            st.success(f"✅ {recovered_forms} forms were recovered from initially missing URLs")
+            
+        missing_forms_count = 0
+        if 'missing_forms' in st.session_state and st.session_state.missing_forms is not None:
+            missing_forms_count = len(st.session_state.missing_forms)
+            real_missing = missing_forms_count - recovered_forms
+            if real_missing > 0:
+                st.warning(f"⚠️ {real_missing} forms are still missing after recovery attempts")
 
         st.subheader("📝 Email template")
         
@@ -225,6 +263,7 @@ def display():
         - Total forms analyzed
         - Unique forms identified (templated and non-templated)
         - CRM code statistics
+        - Recovered forms count (if any)
         - Missing forms count
         
         **2. URL MAPPING METRICS**
@@ -237,7 +276,8 @@ def display():
         - Highlights potential issues that need attention
         - Shows forms with incorrect integration
         - Shows forms missing CRM tracking
-        - Shows missing forms from extraction
+        - Shows recovered forms from missing URLs
+        - Shows forms still missing after recovery attempts
         - Shows any mapping or CRM data with significant missing values
         
         **5. EXPORT DETAILS**

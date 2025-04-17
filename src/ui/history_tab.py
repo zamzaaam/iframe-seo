@@ -44,11 +44,17 @@ def save_to_history(results, input_urls, parameters, execution_time):
         sanitized_results = sanitize_history_data(results)
         sanitized_urls = sanitize_history_data(input_urls)
         
+        # Compter les formulaires récupérés
+        recovered_forms = [r for r in results if r.get('Recovery Status') == 'Recovered']
+        original_forms = [r for r in results if r.get('Recovery Status') != 'Recovered']
+        
         history_entry = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "input_urls": sanitized_urls,
             "nb_input_urls": len(input_urls),
             "nb_iframes_found": len(results),
+            "nb_recovered_forms": len(recovered_forms),
+            "nb_original_forms": len(original_forms),
             "results": sanitized_results,
             "parameters": parameters,
             "execution_time": execution_time
@@ -59,16 +65,20 @@ def save_to_history(results, input_urls, parameters, execution_time):
             # Convertir en dict pour stockage dans l'historique
             history_entry["missing_forms"] = st.session_state.missing_forms.to_dict('records') if not st.session_state.missing_forms.empty else []
         
+        # Sauvegarder les formulaires récupérés s'ils existent
+        if 'recovered_forms' in st.session_state and st.session_state.recovered_forms:
+            history_entry["recovered_forms"] = st.session_state.recovered_forms
+        
         # Vérifier si l'historique existe déjà
         if 'history' not in st.session_state:
             st.session_state.history = []
             
         st.session_state.history.append(history_entry)
-        logger.info(f"Added history entry with {len(results)} results")
+        logger.info(f"Added history entry with {len(results)} results ({len(recovered_forms)} recovered)")
     except Exception as e:
         logger.error(f"Error saving to history: {str(e)}")
 
-def export_with_sheets(results, timestamp, missing_forms=None):
+def export_with_sheets(results, timestamp, missing_forms=None, recovered_forms=None):
     """Crée un export Excel multi-feuilles pour une entrée d'historique."""
     try:
         if not results or not isinstance(results, list):
@@ -95,7 +105,12 @@ def export_with_sheets(results, timestamp, missing_forms=None):
                 missing_df = pd.DataFrame(missing_forms)
                 missing_df.to_excel(writer, sheet_name="Missing Forms", index=False)
             
-            # Feuille 3: Données des templates Selligent
+            # Feuille 3: Formulaires récupérés (si disponibles)
+            if recovered_forms and len(recovered_forms) > 0:
+                recovered_df = pd.DataFrame(recovered_forms)
+                recovered_df.to_excel(writer, sheet_name="Recovered Forms", index=False)
+            
+            # Feuille 4: Données des templates Selligent
             try:
                 # Charger les données de template depuis le fichier JSON
                 with open("data/template_mapping.json", "r") as f:
@@ -122,6 +137,7 @@ def display_history_entry(entry, idx):
     try:
         st.markdown("### Extraction details")
 
+        # Afficher les métriques de base
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("URLs analyzed", entry["nb_input_urls"])
@@ -130,9 +146,22 @@ def display_history_entry(entry, idx):
         with col3:
             st.metric("Duration", f"{entry['execution_time']:.2f}s")
 
+        # Afficher les métriques pour les formulaires récupérés s'ils existent
+        if "nb_recovered_forms" in entry and entry["nb_recovered_forms"] > 0:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Original forms", entry["nb_original_forms"])
+            with col2:
+                st.metric("Recovered forms", entry["nb_recovered_forms"], 
+                         delta=f"+{entry['nb_recovered_forms']}", 
+                         delta_color="normal")
+
         # Afficher les formulaires manquants s'ils existent
         if "missing_forms" in entry and entry["missing_forms"]:
-            st.warning(f"⚠️ {len(entry['missing_forms'])} forms found in URL mapping but missing in extraction")
+            if "nb_recovered_forms" in entry and entry["nb_recovered_forms"] > 0:
+                st.warning(f"⚠️ {len(entry['missing_forms']) - entry['nb_recovered_forms']} forms still missing after recovery attempts")
+            else:
+                st.warning(f"⚠️ {len(entry['missing_forms'])} forms found in URL mapping but missing in extraction")
 
         st.markdown("#### Parameters")
         # Afficher uniquement les paramètres approuvés
@@ -162,6 +191,12 @@ def display_history_entry(entry, idx):
                         st.session_state.missing_forms = pd.DataFrame(entry["missing_forms"])
                     else:
                         st.session_state.missing_forms = None
+                    
+                    # Recharger les formulaires récupérés s'ils existent
+                    if "recovered_forms" in entry and entry["recovered_forms"]:
+                        st.session_state.recovered_forms = entry["recovered_forms"]
+                    else:
+                        st.session_state.recovered_forms = None
                     
                     st.success("✨ Extraction reloaded! You can now analyze it in the 'Analysis' tab")
                 else:
@@ -193,10 +228,14 @@ def display_history_entry(entry, idx):
                         # Récupérer les formulaires manquants pour l'export
                         missing_forms = entry.get("missing_forms", [])
                         
+                        # Récupérer les formulaires récupérés pour l'export
+                        recovered_forms = entry.get("recovered_forms", [])
+                        
                         output, filename = export_with_sheets(
                             entry["results"], 
                             entry["timestamp"],
-                            missing_forms
+                            missing_forms,
+                            recovered_forms
                         )
                         
                         if output:
@@ -234,11 +273,15 @@ def display():
             # Calculer le nombre de formulaires manquants
             missing_forms_count = len(entry.get("missing_forms", [])) if "missing_forms" in entry else 0
             
+            # Calculer le nombre de formulaires récupérés
+            recovered_forms_count = entry.get("nb_recovered_forms", 0)
+            
             history_data.append({
                 "Date": entry["timestamp"],
                 "Source URLs": entry["nb_input_urls"],
                 "Iframes found": entry["nb_iframes_found"],
                 "Missing forms": missing_forms_count,
+                "Recovered forms": recovered_forms_count,
                 "Duration (s)": f"{entry['execution_time']:.2f}",
                 "Test mode": "✓" if entry["parameters"].get("test_mode", False) else "✗",
             })
