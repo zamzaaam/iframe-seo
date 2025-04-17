@@ -217,6 +217,10 @@ def display():
 
     # Extraction et validation des URLs
     raw_urls = [url.strip() for url in urls_input.splitlines() if url.strip()]
+    
+    # MODIFICATION: Éliminer les doublons des URLs d'entrée
+    raw_urls = list(dict.fromkeys(raw_urls))
+    
     urls = sanitize_urls(raw_urls)
     
     # Avertissement si des URLs ont été filtrées
@@ -266,11 +270,16 @@ def display():
                     sitemap_urls = sitemap_extractor.extract_urls(sitemap_url)
                     # Valider les URLs extraites du sitemap
                     sitemap_urls = sanitize_urls(sitemap_urls)
-                    processed_urls.extend(sitemap_urls)
+                    
+                    # MODIFICATION: Ajouter uniquement les URLs non-dupliquées
+                    for url in sitemap_urls:
+                        if url not in processed_urls:
+                            processed_urls.append(url)
+                    
                     progress_sitemap.progress((idx + 1) / len(urls))
 
                 if processed_urls and not st.session_state.abort_extraction:
-                    st.success(f"✅ {len(processed_urls)} URLs extracted from sitemaps")
+                    st.success(f"✅ {len(processed_urls)} unique URLs extracted from sitemaps")
                 else:
                     st.error("❌ No valid URLs found in sitemaps")
                     return
@@ -285,6 +294,9 @@ def display():
                 status = st.empty()
                 progress = st.progress(0)
                 status.write(f"🔍 Analyzing {len(processed_urls)} URLs...")
+
+                # Afficher le nombre d'URLs uniques
+                st.info(f"🔍 Found {len(processed_urls)} unique URLs to analyze")
 
                 for i in range(0, len(processed_urls), Config.CHUNK_SIZE):
                     # Vérifier si l'extraction doit être interrompue
@@ -317,7 +329,7 @@ def display():
 
                     st.success(f"""
                     ✨ Extraction completed in {execution_time:.2f} seconds!
-                    - 📊 {len(processed_urls)} URLs analyzed
+                    - 📊 {len(processed_urls)} unique URLs analyzed
                     - 🎯 {len(results)} iframes found
                     """)
                     

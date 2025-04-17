@@ -19,6 +19,27 @@ def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
     
+    # Créer une copie du DataFrame pour éviter les SettingWithCopyWarning
+    sanitized_df = df.copy()
+    
+    # Fonction pour sanitizer les chaînes individuelles
+    def sanitize_value(val):
+        if isinstance(val, str):
+            # Remplacer les caractères potentiellement dangereux
+            val = val.replace('<', '&lt;').replace('>', '&gt;')
+            val = val.replace('"', '&quot;').replace("'", '&#39;')
+            # Supprimer les scripts potentiels
+            val = re.sub(r'javascript:', '', val, flags=re.IGNORECASE)
+            val = re.sub(r'on\w+\s*=', '', val, flags=re.IGNORECASE)
+        return val
+    
+    # Appliquer la sanitization à toutes les colonnes textuelles
+    for col in sanitized_df.columns:
+        if sanitized_df[col].dtype == 'object':
+            sanitized_df.loc[:, col] = sanitized_df[col].apply(sanitize_value)
+    
+    return sanitized_df
+    
     # Fonction pour sanitizer les chaînes individuelles
     def sanitize_value(val):
         if isinstance(val, str):
@@ -671,7 +692,7 @@ def display_export(df):
     
     # Options additionnelles pour Excel
     excel_options = {}
-    if export_format == "Excel":
+    if export_format == "Excel (multi-sheet)":
         st.subheader("Excel options")
         excel_options["include_template_data"] = st.checkbox(
             "Include template mapping data", 
@@ -726,9 +747,13 @@ def display_export(df):
             # Préparer le DataFrame pour l'export
             export_df = df.copy()
             if rename_crm_cols:
+                renamed_columns = {}
                 for col in export_df.columns:
                     if col.startswith('CRM_'):
-                        export_df = export_df.rename(columns={col: col.replace('CRM_', '')})
+                        renamed_columns[col] = col.replace('CRM_', '')
+                
+                if renamed_columns:
+                    export_df = export_df.rename(columns=renamed_columns)
             
             # Sanitize les données avant export
             export_df = sanitize_dataframe(export_df)
@@ -750,56 +775,79 @@ def display_export(df):
                 # Export Excel multi-feuilles
                 output = BytesIO()
                 
-                # Créer un writer Excel
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    # Feuille 1: Résultats de l'analyse
-                    export_df.to_excel(writer, sheet_name="Analysis Results", index=False)
-                    
-                    # Feuille 2: Formulaires manquants (si disponibles)
-                    if excel_options.get("include_missing_forms", False) and missing_forms is not None and not missing_forms.empty:
-                        missing_forms.to_excel(writer, sheet_name="Missing Forms", index=False)
-                    
-                    # Feuille 3: Données de mapping URL (si disponibles)
-                    if excel_options.get("include_mapped_data", False) and url_mapping_data is not None:
-                        url_mapping_data.to_excel(writer, sheet_name="URL Mapping Data", index=False)
-                    
-                    # Feuille 4: Données CRM (si disponibles)
-                    if excel_options.get("include_crm_data", False) and crm_data is not None:
-                        crm_data.to_excel(writer, sheet_name="CRM Campaign Data", index=False)
-                    
-                    # Feuille 5: Données des templates Selligent
-                    if excel_options.get("include_template_data", False):
-                        try:
-                            # Charger les données de template depuis le fichier JSON
-                            with open("data/template_mapping.json", "r") as f:
-                                template_data = json.load(f)
+                try:
+                    # Créer un writer Excel avec le moteur openpyxl
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        # Feuille 1: Résultats de l'analyse
+                        export_df.to_excel(writer, sheet_name="Analysis Results", index=False)
+                        
+                        # Feuille 2: Formulaires manquants (si disponibles)
+                        if excel_options.get("include_missing_forms", False) and missing_forms is not None and not missing_forms.empty:
+                            missing_forms_df = missing_forms.copy()
+                            missing_forms_df.to_excel(writer, sheet_name="Missing Forms", index=False)
+                        
+                        # Feuille 3: Données de mapping URL (si disponibles)
+                        if excel_options.get("include_mapped_data", False) and url_mapping_data is not None:
+                            url_mapping_df = url_mapping_data.copy()
+                            url_mapping_df.to_excel(writer, sheet_name="URL Mapping Data", index=False)
+                        
+                        # Feuille 4: Données CRM (si disponibles)
+                        if excel_options.get("include_crm_data", False) and crm_data is not None:
+                            crm_df = crm_data.copy()
+                            crm_df.to_excel(writer, sheet_name="CRM Campaign Data", index=False)
+                        
+                        # Feuille 5: Données des templates Selligent
+                        if excel_options.get("include_template_data", False):
+                            try:
+                                # Charger les données de template depuis le fichier JSON
+                                with open("data/template_mapping.json", "r") as f:
+                                    template_data = json.load(f)
+                                    
+                                # Convertir en DataFrame
+                                template_df = pd.DataFrame([
+                                    {"Form ID": form_id, "Template Name": template_name}
+                                    for form_id, template_name in template_data.items()
+                                ])
                                 
-                            # Convertir en DataFrame
-                            template_df = pd.DataFrame([
-                                {"Form ID": form_id, "Template Name": template_name}
-                                for form_id, template_name in template_data.items()
-                            ])
-                            
-                            template_df.to_excel(writer, sheet_name="Template Data", index=False)
-                        except Exception as e:
-                            st.warning(f"Could not include template data: {str(e)}")
+                                template_df.to_excel(writer, sheet_name="Template Data", index=False)
+                            except Exception as e:
+                                st.warning(f"Could not include template data: {str(e)}")
+                                logger.error(f"Error adding template data to Excel: {str(e)}")
+                        
+                        # Feuille 6: Résumé des formulaires récupérés (si disponibles et activés)
+                        if excel_options.get("include_recovered_summary", False) and 'recovered_forms' in st.session_state and st.session_state.recovered_forms:
+                            # Créer un DataFrame à partir des formulaires récupérés
+                            recovered_df = pd.DataFrame(st.session_state.recovered_forms)
+                            recovered_df.to_excel(writer, sheet_name="Recovered Forms", index=False)
                     
-                    # Feuille 6: Résumé des formulaires récupérés (si disponibles et activés)
-                    if excel_options.get("include_recovered_summary", False) and 'recovered_forms' in st.session_state and st.session_state.recovered_forms:
-                        # Créer un DataFrame à partir des formulaires récupérés
-                        recovered_df = pd.DataFrame(st.session_state.recovered_forms)
-                        recovered_df.to_excel(writer, sheet_name="Recovered Forms", index=False)
+                    # Faire remonter le buffer au début
+                    output.seek(0)
+                    
+                    st.download_button(
+                        "📥 Download analysis (Excel)",
+                        output.getvalue(),
+                        f"{filename}.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                except Exception as e:
+                    logger.error(f"Error creating Excel file: {str(e)}")
+                    st.error(f"Error creating Excel file: {str(e)}")
+                    
+                    # Fallback to CSV if Excel export fails
+                    st.warning("Falling back to CSV export due to Excel error.")
+                    output_csv = StringIO()
+                    export_df.to_csv(output_csv, index=False)
+                    st.download_button(
+                        "📥 Download analysis (CSV fallback)",
+                        output_csv.getvalue(),
+                        f"{filename}.csv",
+                        "text/csv"
+                    )
                 
-                output.seek(0)
-                st.download_button(
-                    "📥 Download analysis (Excel)",
-                    output.getvalue(),
-                    f"{filename}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
         except Exception as e:
             st.error(f"Error generating export: {str(e)}")
             logger.error(f"Error in display_export: {str(e)}")
+
 
 def display():
     """Affiche l'onglet analyse."""

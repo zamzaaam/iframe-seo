@@ -95,39 +95,65 @@ def export_with_sheets(results, timestamp, missing_forms=None, recovered_forms=N
         # Créer le buffer de sortie
         output = BytesIO()
         
-        # Créer un writer Excel
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Feuille 1: Résultats de l'extraction
-            export_df.to_excel(writer, sheet_name="Extraction Results", index=False)
-            
-            # Feuille 2: Formulaires manquants (si disponibles)
-            if missing_forms and len(missing_forms) > 0:
-                missing_df = pd.DataFrame(missing_forms)
-                missing_df.to_excel(writer, sheet_name="Missing Forms", index=False)
-            
-            # Feuille 3: Formulaires récupérés (si disponibles)
-            if recovered_forms and len(recovered_forms) > 0:
-                recovered_df = pd.DataFrame(recovered_forms)
-                recovered_df.to_excel(writer, sheet_name="Recovered Forms", index=False)
-            
-            # Feuille 4: Données des templates Selligent
-            try:
-                # Charger les données de template depuis le fichier JSON
-                with open("data/template_mapping.json", "r") as f:
-                    template_data = json.load(f)
-                    
-                # Convertir en DataFrame
-                template_df = pd.DataFrame([
-                    {"Form ID": form_id, "Template Name": template_name}
-                    for form_id, template_name in template_data.items()
-                ])
+        try:
+            # Créer un writer Excel
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # Feuille 1: Résultats de l'extraction
+                export_df.to_excel(writer, sheet_name="Extraction Results", index=False)
                 
-                template_df.to_excel(writer, sheet_name="Template Data", index=False)
-            except Exception as e:
-                logger.error(f"Could not include template data: {str(e)}")
-        
-        output.seek(0)
-        return output, filename
+                # Feuille 2: Formulaires manquants (si disponibles)
+                if missing_forms and len(missing_forms) > 0:
+                    missing_df = pd.DataFrame(missing_forms).copy()
+                    missing_df.to_excel(writer, sheet_name="Missing Forms", index=False)
+                
+                # Feuille 3: Formulaires récupérés (si disponibles)
+                if recovered_forms and len(recovered_forms) > 0:
+                    recovered_df = pd.DataFrame(recovered_forms).copy()
+                    recovered_df.to_excel(writer, sheet_name="Recovered Forms", index=False)
+                
+                # Feuille 4: Données des templates Selligent
+                try:
+                    # Charger les données de template depuis le fichier JSON
+                    with open("data/template_mapping.json", "r") as f:
+                        template_data = json.load(f)
+                        
+                    # Convertir en DataFrame
+                    template_df = pd.DataFrame([
+                        {"Form ID": form_id, "Template Name": template_name}
+                        for form_id, template_name in template_data.items()
+                    ])
+                    
+                    template_df.to_excel(writer, sheet_name="Template Data", index=False)
+                except Exception as e:
+                    logger.error(f"Could not include template data: {str(e)}")
+            
+            # S'assurer que le buffer est positionné au début
+            output.seek(0)
+            return output, filename
+            
+        except Exception as e:
+            logger.error(f"Error writing Excel with openpyxl: {str(e)}")
+            
+            # Tenter avec un autre moteur comme xlsxwriter
+            output = BytesIO()
+            try:
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    export_df.to_excel(writer, sheet_name="Extraction Results", index=False)
+                    
+                    if missing_forms and len(missing_forms) > 0:
+                        missing_df = pd.DataFrame(missing_forms).copy()
+                        missing_df.to_excel(writer, sheet_name="Missing Forms", index=False)
+                    
+                    if recovered_forms and len(recovered_forms) > 0:
+                        recovered_df = pd.DataFrame(recovered_forms).copy()
+                        recovered_df.to_excel(writer, sheet_name="Recovered Forms", index=False)
+                        
+                output.seek(0)
+                return output, filename
+            except Exception as fallback_e:
+                logger.error(f"Fallback Excel writing also failed: {str(fallback_e)}")
+                return None, None
+            
     except Exception as e:
         logger.error(f"Error creating multi-sheet export: {str(e)}")
         return None, None
