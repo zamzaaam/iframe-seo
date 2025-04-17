@@ -8,7 +8,7 @@ import re
 import json
 from datetime import datetime
 
-# Configuration du logger
+# Initialisation du logger
 logger = logging.getLogger('analysis_tab')
 
 def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -104,6 +104,39 @@ def load_data_file(file):
     except Exception as e:
         st.error(f"❌ Error loading file: {str(e)}")
         logger.error(f"Error loading file: {str(e)}")
+        return None
+
+def find_missing_forms(extraction_results, url_mapping_data, url_column, id_column):
+    """
+    Identifie les formulaires présents dans le mapping mais absents des résultats d'extraction
+    """
+    try:
+        if extraction_results is None or url_mapping_data is None:
+            return None
+            
+        # Créer un DataFrame à partir des résultats d'extraction
+        extracted_df = pd.DataFrame(extraction_results)
+        
+        # Si le mapping ou l'extraction n'ont pas les colonnes nécessaires
+        if url_column not in url_mapping_data.columns or 'URL source' not in extracted_df.columns:
+            return None
+            
+        # Récupérer toutes les URLs du mapping et de l'extraction
+        mapping_urls = set(url_mapping_data[url_column].dropna().tolist())
+        extracted_urls = set(extracted_df['URL source'].dropna().tolist())
+        
+        # Trouver les URLs présentes dans le mapping mais pas dans l'extraction
+        missing_urls = mapping_urls - extracted_urls
+        
+        # Créer un DataFrame des formulaires manquants
+        if missing_urls:
+            missing_forms = url_mapping_data[url_mapping_data[url_column].isin(missing_urls)].copy()
+            missing_forms['Status'] = 'Missing in extraction'
+            return missing_forms
+            
+        return pd.DataFrame() # Retourner un DataFrame vide si aucun formulaire manquant
+    except Exception as e:
+        logger.error(f"Error finding missing forms: {str(e)}")
         return None
 
 def display_summary(df):
@@ -227,6 +260,37 @@ def display_alerts(df):
                 )
     else:
         st.success("✅ No anomalies detected")
+
+def display_missing_forms():
+    """Affiche les formulaires présents dans le mapping mais absents dans l'extraction"""
+    if 'missing_forms' not in st.session_state or st.session_state.missing_forms is None:
+        return
+    
+    missing_forms = st.session_state.missing_forms
+    if missing_forms.empty:
+        return
+        
+    st.subheader("📋 Missing Forms", divider="orange")
+    st.warning(f"⚠️ {len(missing_forms)} forms found in URL mapping but missing in extraction results")
+    
+    # Afficher un tableau des formulaires manquants
+    st.dataframe(
+        missing_forms,
+        use_container_width=True
+    )
+    
+    # Option pour télécharger seulement les formulaires manquants
+    col1, _ = st.columns([1, 3])
+    with col1:
+        # Export des formulaires manquants
+        output = BytesIO()
+        missing_forms.to_csv(output, index=False)
+        st.download_button(
+            "📥 Download missing forms (CSV)",
+            output.getvalue(),
+            "missing_forms.csv",
+            "text/csv"
+        )
 
 def display_details(df):
     """Affiche les détails des données"""
@@ -371,6 +435,7 @@ def display_export(df):
     # Récupérer les données de mapping depuis la session state
     url_mapping_data = st.session_state.url_mapping_data if 'url_mapping_data' in st.session_state else None
     crm_data = st.session_state.crm_data if 'crm_data' in st.session_state else None
+    missing_forms = st.session_state.missing_forms if 'missing_forms' in st.session_state else None
         
     st.subheader("💾 Export results")
     
@@ -415,6 +480,16 @@ def display_export(df):
             )
         else:
             excel_options["include_crm_data"] = False
+            
+        # Option pour les formulaires manquants (si disponibles)
+        if missing_forms is not None and not missing_forms.empty:
+            excel_options["include_missing_forms"] = st.checkbox(
+                "Include missing forms data", 
+                value=True,
+                help="Add a sheet with forms found in URL mapping but missing in extraction"
+            )
+        else:
+            excel_options["include_missing_forms"] = False
     
     col1, _ = st.columns([1, 3])
     
@@ -452,15 +527,19 @@ def display_export(df):
                     # Feuille 1: Résultats de l'analyse
                     export_df.to_excel(writer, sheet_name="Analysis Results", index=False)
                     
-                    # Feuille 2: Données de mapping URL (si disponibles)
+                    # Feuille 2: Formulaires manquants (si disponibles)
+                    if excel_options.get("include_missing_forms", False) and missing_forms is not None and not missing_forms.empty:
+                        missing_forms.to_excel(writer, sheet_name="Missing Forms", index=False)
+                    
+                    # Feuille 3: Données de mapping URL (si disponibles)
                     if excel_options.get("include_mapped_data", False) and url_mapping_data is not None:
                         url_mapping_data.to_excel(writer, sheet_name="URL Mapping Data", index=False)
                     
-                    # Feuille 3: Données CRM (si disponibles)
+                    # Feuille 4: Données CRM (si disponibles)
                     if excel_options.get("include_crm_data", False) and crm_data is not None:
                         crm_data.to_excel(writer, sheet_name="CRM Campaign Data", index=False)
                     
-                    # Feuille 4: Données des templates Selligent
+                    # Feuille 5: Données des templates Selligent
                     if excel_options.get("include_template_data", False):
                         try:
                             # Charger les données de template depuis le fichier JSON
@@ -497,6 +576,8 @@ def display():
         st.session_state.url_mapping_data = None
     if 'crm_data' not in st.session_state:
         st.session_state.crm_data = None
+    if 'missing_forms' not in st.session_state:
+        st.session_state.missing_forms = None
 
     # Vérifie si des résultats sont disponibles
     if not st.session_state.extraction_results:
@@ -620,6 +701,20 @@ def display():
                         crm_mapping_config
                     )
                     
+                    # Chercher les formulaires manquants si mapping URL disponible
+                    if url_mapping_data is not None and url_mapping_config is not None:
+                            missing_forms = find_missing_forms(
+                                st.session_state.extraction_results,
+                                url_mapping_data,
+                                url_mapping_config["url_column"],
+                                url_mapping_config["id_column"]
+                            )
+                            st.session_state.missing_forms = missing_forms
+                            
+                            # Afficher un compteur des formulaires manquants
+                            if missing_forms is not None and not missing_forms.empty:
+                                st.warning(f"⚠️ {len(missing_forms)} forms found in URL mapping but missing in extraction results")
+                    
                     # Sanitize le résultat
                     analyzed_df = sanitize_dataframe(analyzed_df)
                     
@@ -650,6 +745,9 @@ def display():
     if st.session_state.analyzed_df is not None:
         # Affichage du résumé
         display_summary(st.session_state.analyzed_df)
+        
+        # Affichage des formulaires manquants
+        display_missing_forms()
         
         # Affichage des détails
         display_details(st.session_state.analyzed_df)

@@ -1,10 +1,10 @@
 import streamlit as st
-import pandas as pd  # S'assurer que pandas est importé
+import pandas as pd
 import time
 import logging
 import re
 from ..utils import sanitize_html
-from datetime import datetime  # Ajouter cet import
+from datetime import datetime
 
 # Configuration du logger
 logger = logging.getLogger('share_tab')
@@ -39,17 +39,26 @@ def generate_email_body(total_forms, unique_forms, templated, with_crm, without_
             logger.error("Invalid metric parameters for email body")
             return "Error generating email content. Please try again."
         
+        # Récupérer le nombre de formulaires manquants
+        missing_forms_count = 0
+        if 'missing_forms' in st.session_state and st.session_state.missing_forms is not None:
+            missing_forms_count = len(st.session_state.missing_forms)
+        
         body = f"""Hello,
 
 Here are the results of the forms analysis:
 
 SUMMARY:
-- {total_forms} total forms analyzed
-- {unique_forms} unique forms identified
+• {total_forms} total forms analyzed
+• {unique_forms} unique forms identified
   - including {templated} templated forms
   - including {unique_forms - templated} non-templated forms
-- {with_crm} forms with CRM code
-- {without_crm} forms without CRM code"""
+• {with_crm} forms with CRM code
+• {without_crm} forms without CRM code"""
+
+        # Ajouter le nombre de formulaires manquants s'il y en a
+        if missing_forms_count > 0:
+            body += f"\n• {missing_forms_count} forms found in URL mapping but missing in extraction"
 
         # Ajouter les métriques pour les données de mapping URL
         if url_mapping_columns and len(url_mapping_columns) > 0:
@@ -89,6 +98,10 @@ SUMMARY:
         if without_crm > 0:
             body += f"\n• ⚠️ {without_crm} forms without CRM tracking"
         
+        # Point d'attention pour les formulaires manquants
+        if missing_forms_count > 0:
+            body += f"\n• ⚠️ {missing_forms_count} forms are missing from the extraction results"
+        
         # Points d'attention pour les données de mapping URL
         if url_mapping_columns:
             for col_name in url_mapping_columns:
@@ -119,6 +132,8 @@ SUMMARY:
         body += "\n\nEXPORT DETAILS:"
         body += "\nThe attached Excel file contains multiple sheets:"
         body += "\n• Analysis Results - Contains the complete data with all columns"
+        if missing_forms_count > 0:
+            body += "\n• Missing Forms - List of forms found in URL mapping but missing in extraction"
         body += "\n• URL Mapping Data - Original mapping data for reference"
         body += "\n• CRM Campaign Data - Original CRM campaign information"
         body += "\n• Template Data - Mapping of form IDs to template names"
@@ -158,7 +173,7 @@ def display():
         try:
             total_forms = len(df)
             unique_forms = df['Form ID'].nunique()
-            templated = df['Template'].notna()['Form ID'].nunique() if 'Template' in df.columns else 0
+            templated = df['Template'].notna().sum() if 'Template' in df.columns else 0
             with_crm = df['CRM Campaign'].notna().sum()
             without_crm = df['CRM Campaign'].isna().sum()
         except Exception as e:
@@ -210,6 +225,7 @@ def display():
         - Total forms analyzed
         - Unique forms identified (templated and non-templated)
         - CRM code statistics
+        - Missing forms count
         
         **2. URL MAPPING METRICS**
         - Shows how many forms have data for each imported URL mapping column
@@ -221,6 +237,7 @@ def display():
         - Highlights potential issues that need attention
         - Shows forms with incorrect integration
         - Shows forms missing CRM tracking
+        - Shows missing forms from extraction
         - Shows any mapping or CRM data with significant missing values
         
         **5. EXPORT DETAILS**
