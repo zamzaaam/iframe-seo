@@ -866,6 +866,8 @@ def display():
                     
                     st.caption("Detected columns: " + ", ".join(url_mapping_data.columns.tolist()))
 
+                    
+                    
                     # Configuration des colonnes de mapping
                     url_mapping_config = {
                         "url_column": st.selectbox(
@@ -878,12 +880,24 @@ def display():
                             options=url_mapping_data.columns.tolist(),
                             help="Column containing the form identifiers"
                         ),
+                        # Nouvelle option pour sélectionner la colonne iframe
+                        "iframe_column": st.selectbox(
+                            "Select iframe URL column (optional)",
+                            options=["None"] + url_mapping_data.columns.tolist(),
+                            help="Column containing the iframe URLs for combined URL+iframe matching"
+                        ),
                         "selected_columns": st.multiselect(
                             "Select additional columns to include",
                             options=[col for col in url_mapping_data.columns],
                             help="Choose additional columns to include in the analysis"
                         )
                     }
+
+                    # Si "None" est sélectionné, définir iframe_column sur None
+                    if url_mapping_config["iframe_column"] == "None":
+                        url_mapping_config["iframe_column"] = None
+
+                    
                     
                     # Enregistrer la configuration dans la session state pour une utilisation ultérieure
                     st.session_state.url_mapping_config = url_mapping_config
