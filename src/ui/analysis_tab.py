@@ -21,16 +21,18 @@ def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     
     # Créer une copie du DataFrame pour éviter les SettingWithCopyWarning
     sanitized_df = df.copy()
-    
-    # Fonction pour sanitizer les chaînes individuelles
+      # Fonction pour sanitizer les chaînes individuelles
     def sanitize_value(val):
+        if pd.isna(val):
+            return val
         if isinstance(val, str):
-            # Remplacer les caractères potentiellement dangereux
+            # Échapper les caractères HTML dangereux
             val = val.replace('<', '&lt;').replace('>', '&gt;')
-            val = val.replace('"', '&quot;').replace("'", '&#39;')
-            # Supprimer les scripts potentiels
-            val = re.sub(r'javascript:', '', val, flags=re.IGNORECASE)
-            val = re.sub(r'on\w+\s*=', '', val, flags=re.IGNORECASE)
+            val = val.replace('"', '&quot;').replace("'", '&#x27;')
+            val = val.replace('&', '&amp;')
+            # Limiter la longueur des chaînes
+            if len(val) > 1000:
+                val = val[:1000] + "..."
         return val
     
     # Appliquer la sanitization à toutes les colonnes textuelles
@@ -39,24 +41,6 @@ def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             sanitized_df.loc[:, col] = sanitized_df[col].apply(sanitize_value)
     
     return sanitized_df
-    
-    # Fonction pour sanitizer les chaînes individuelles
-    def sanitize_value(val):
-        if isinstance(val, str):
-            # Remplacer les caractères potentiellement dangereux
-            val = val.replace('<', '&lt;').replace('>', '&gt;')
-            val = val.replace('"', '&quot;').replace("'", '&#39;')
-            # Supprimer les scripts potentiels
-            val = re.sub(r'javascript:', '', val, flags=re.IGNORECASE)
-            val = re.sub(r'on\w+\s*=', '', val, flags=re.IGNORECASE)
-        return val
-    
-    # Appliquer la sanitization à toutes les colonnes textuelles
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            df[col] = df[col].apply(sanitize_value)
-    
-    return df
 
 def validate_file_content(file) -> bool:
     """Valide le contenu d'un fichier téléchargé."""
@@ -794,13 +778,13 @@ def display_export(df):
                         # Feuille 4: Données CRM (si disponibles)
                         if excel_options.get("include_crm_data", False) and crm_data is not None:
                             crm_df = crm_data.copy()
-                            crm_df.to_excel(writer, sheet_name="CRM Campaign Data", index=False)
-                        
-                        # Feuille 5: Données des templates Selligent
+                            crm_df.to_excel(writer, sheet_name="CRM Campaign Data", index=False)                        # Feuille 5: Données des templates Selligent
                         if excel_options.get("include_template_data", False):
                             try:
                                 # Charger les données de template depuis le fichier JSON
-                                with open("data/template_mapping.json", "r") as f:
+                                from ..utils import get_data_file_path
+                                json_path = get_data_file_path("template_mapping.json")
+                                with open(json_path, "r") as f:
                                     template_data = json.load(f)
                                     
                                 # Convertir en DataFrame

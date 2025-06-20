@@ -109,12 +109,12 @@ def export_with_sheets(results, timestamp, missing_forms=None, recovered_forms=N
                 # Feuille 3: Formulaires récupérés (si disponibles)
                 if recovered_forms and len(recovered_forms) > 0:
                     recovered_df = pd.DataFrame(recovered_forms).copy()
-                    recovered_df.to_excel(writer, sheet_name="Recovered Forms", index=False)
-                
-                # Feuille 4: Données des templates Selligent
+                    recovered_df.to_excel(writer, sheet_name="Recovered Forms", index=False)                # Feuille 4: Données des templates Selligent
                 try:
                     # Charger les données de template depuis le fichier JSON
-                    with open("data/template_mapping.json", "r") as f:
+                    from ..utils import get_data_file_path
+                    json_path = get_data_file_path("template_mapping.json")
+                    with open(json_path, "r") as f:
                         template_data = json.load(f)
                         
                     # Convertir en DataFrame

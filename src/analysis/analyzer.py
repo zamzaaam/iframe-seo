@@ -10,7 +10,9 @@ class IframeAnalyzer:
     def _load_template_mapping(self):
         """Charge le fichier JSON de mapping des templates"""
         try:
-            with open("data/template_mapping.json", "r") as f:
+            from ..utils import get_data_file_path
+            json_path = get_data_file_path("template_mapping.json")
+            with open(json_path, "r") as f:
                 return json.load(f)
         except Exception:
             return None

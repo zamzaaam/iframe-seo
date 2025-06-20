@@ -3,6 +3,8 @@ import requests
 from typing import Tuple, List, Optional
 from .config import Config
 import urllib.parse
+import os
+from pathlib import Path
 
 def extract_id_and_code(url: str) -> Tuple[Optional[str], Optional[str]]:
     """Extrait l'ID et le code CRM d'une URL iframe."""
@@ -112,3 +114,11 @@ def sanitize_html(html_content: str) -> str:
     html_content = html_content.replace('"', '&quot;').replace("'", '&#39;')
     
     return html_content
+
+def get_project_root() -> Path:
+    """Retourne le répertoire racine du projet de façon cross-platform."""
+    return Path(__file__).parent.parent
+
+def get_data_file_path(filename: str) -> Path:
+    """Retourne le chemin vers un fichier dans le dossier data."""
+    return get_project_root() / "data" / filename
